@@ -3,9 +3,9 @@
  * matter_thread.h answered by nothing, for size measurement only. Every result
  * comes from a volatile so link-time optimisation cannot fold the callers'
  * success paths away, and the receive path still reaches the core's
- * matter_thread_on_datagram(), so the measured floor keeps all of tinymatter.
+ * matter_thread_on_datagram(), so the measured floor keeps all of tinytalk.
  */
-#include <tinymatter/matter_thread.h>
+#include <tinytalk/matter_thread.h>
 
 #include <string.h>
 
