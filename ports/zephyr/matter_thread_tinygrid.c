@@ -246,7 +246,7 @@ static void reconcile(void)
 			if (held) {
 				continue;
 			}
-			(void)snprintf(o->inst, sizeof(o->inst), "%s", s_ops[j].want);
+			memcpy(o->inst, s_ops[j].want, sizeof(o->inst));
 			o->sub[0] = '_';
 			o->sub[1] = 'I';
 			memcpy(o->sub + 2, o->inst, 16);

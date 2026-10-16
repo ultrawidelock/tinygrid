@@ -64,16 +64,28 @@ static uint8_t mode_byte(void)
 	return POLL_MS ? 0x00u : 0x08u; /* rx-on-when-idle; MTD; stable data only */
 }
 
-static const uint8_t *tlv(const uint8_t *p, uint16_t n, uint8_t type, uint8_t len)
+#define TLV_N (T_ATS + 1)
+
+/* The shortest value of each TLV this child reads; shorter counts as absent. */
+static const uint8_t tlv_min[TLV_N] = {
+	[T_SRC] = 2, [T_CHAL] = 4, [T_RESP] = 8, [T_LFC] = 4, [T_MFC] = 4, [T_ADDR16] = 2,
+	[T_LEADER] = 8, [T_CONN] = 7, [T_MARGIN] = 1, [T_STATUS] = 1, [T_VERSION] = 2,
+};
+
+/* One pass over a message's TLVs: v[type] is the value of the first one. */
+static void tlvs(const uint8_t *p, uint16_t n, const uint8_t *v[TLV_N])
 {
+	uint32_t seen = 0;
+
+	memset(v, 0, TLV_N * sizeof(v[0]));
 	while (n >= 2u && 2u + p[1] <= n) {
-		if (p[0] == type) {
-			return p[1] >= len ? p + 2 : NULL;
+		if (p[0] < TLV_N && !(seen & (1u << p[0]))) {
+			seen |= 1u << p[0];
+			v[p[0]] = p[1] >= tlv_min[p[0]] ? p + 2 : NULL;
 		}
 		n = (uint16_t)(n - 2u - p[1]);
 		p += 2u + p[1];
 	}
-	return NULL;
 }
 
 static uint8_t tlv_len(const uint8_t *v) { return v[-1]; }
@@ -423,9 +435,9 @@ void tg_mle_netdata(const uint8_t *nd, uint8_t len)
 }
 
 /* Leader Data in any message from the parent; true if Network Data rode along. */
-static void leader_seen(const uint8_t *t, uint16_t n)
+static void leader_seen(const uint8_t *const *v)
 {
-	const uint8_t *ld = tlv(t, n, T_LEADER, 8), *nd = tlv(t, n, T_NETDATA, 0);
+	const uint8_t *ld = v[T_LEADER], *nd = v[T_NETDATA];
 
 	if (ld == NULL) {
 		return;
@@ -442,13 +454,11 @@ static void leader_seen(const uint8_t *t, uint16_t n)
 
 /* ---- receive ----------------------------------------------------------- */
 
-static void on_prsp(const uint8_t ext[8], const uint8_t *t, uint16_t n, uint32_t ks)
+static void on_prsp(const uint8_t ext[8], const uint8_t *const *v, uint32_t ks)
 {
-	const uint8_t *resp = tlv(t, n, T_RESP, 8), *src = tlv(t, n, T_SRC, 2),
-		      *ver = tlv(t, n, T_VERSION, 2), *ld = tlv(t, n, T_LEADER, 8),
-		      *lm = tlv(t, n, T_MARGIN, 1), *conn = tlv(t, n, T_CONN, 7),
-		      *lfc = tlv(t, n, T_LFC, 4), *mfc = tlv(t, n, T_MFC, 4),
-		      *chal = tlv(t, n, T_CHAL, 4);
+	const uint8_t *resp = v[T_RESP], *src = v[T_SRC], *ver = v[T_VERSION], *ld = v[T_LEADER],
+		      *lm = v[T_MARGIN], *conn = v[T_CONN], *lfc = v[T_LFC], *mfc = v[T_MFC],
+		      *chal = v[T_CHAL];
 	int margin = tg.rssi - NOISE_FLOOR;
 	int8_t prio;
 
@@ -482,10 +492,9 @@ static void on_prsp(const uint8_t ext[8], const uint8_t *t, uint16_t n, uint32_t
 	}
 }
 
-static void on_cidrsp(const uint8_t ext[8], const uint8_t *t, uint16_t n, uint32_t ks, uint32_t fc)
+static void on_cidrsp(const uint8_t ext[8], const uint8_t *const *v, uint32_t ks, uint32_t fc)
 {
-	const uint8_t *src = tlv(t, n, T_SRC, 2), *a16 = tlv(t, n, T_ADDR16, 2),
-		      *ld = tlv(t, n, T_LEADER, 8), *nd = tlv(t, n, T_NETDATA, 0);
+	const uint8_t *src = v[T_SRC], *a16 = v[T_ADDR16], *ld = v[T_LEADER], *nd = v[T_NETDATA];
 
 	if (tg.ast != A_CIDREQ || memcmp(ext, tg.cand.ext, 8) || !src || !a16 || !ld || !nd ||
 	    (get16(src) >> 10) != (get16(a16) >> 10) || ks < tg.cand.kseq ||
@@ -521,9 +530,9 @@ static void on_cidrsp(const uint8_t ext[8], const uint8_t *t, uint16_t n, uint32
 	tg_plat_changed();
 }
 
-static void on_cursp(const uint8_t *t, uint16_t n)
+static void on_cursp(const uint8_t *const *v)
 {
-	if (tlv(t, n, T_STATUS, 1)) {
+	if (v[T_STATUS]) {
 		tg_mle_start(); /* not this parent's child any more */
 		return;
 	}
@@ -538,19 +547,19 @@ static void on_cursp(const uint8_t *t, uint16_t n)
 		}
 	}
 	tg.txfail = 0;
-	leader_seen(t, n);
+	leader_seen(v);
 }
 
-static void on_cureq(const uint8_t *t, uint16_t n)
+static void on_cureq(const uint8_t *const *v)
 {
-	const uint8_t *chal = tlv(t, n, T_CHAL, 4);
+	const uint8_t *chal = v[T_CHAL];
 	uint8_t m[112], *p = begin(m, C_CURSP), dst[16];
 
-	if (tlv(t, n, T_STATUS, 1)) {
+	if (v[T_STATUS]) {
 		tg_mle_start();
 		return;
 	}
-	leader_seen(t, n);
+	leader_seen(v);
 	p = put16t(p, T_SRC, tg.rloc);
 	p = put8(p, T_MODE, mode_byte());
 	p = put(p, T_LEADER, leader_raw, 8);
@@ -568,7 +577,7 @@ static void on_cureq(const uint8_t *t, uint16_t n)
 void tg_mle_rx(const uint8_t src[16], const uint8_t dst[16], uint8_t *m, uint16_t n)
 {
 	uint8_t ext[8], a[42], nonce[13], mk[16], ak[16];
-	const uint8_t *key = tg.mle_key;
+	const uint8_t *key = tg.mle_key, *v[TLV_N];
 	uint32_t fc, ks;
 	bool from_par;
 
@@ -605,12 +614,13 @@ void tg_mle_rx(const uint8_t src[16], const uint8_t dst[16], uint8_t *m, uint16_
 			tg_set_kseq(ks);
 		}
 	}
+	tlvs(m + 12, n, v);
 	switch (m[11]) {
 	case C_PRSP:
-		on_prsp(ext, m + 12, n, ks);
+		on_prsp(ext, v, ks);
 		return;
 	case C_CIDRSP:
-		on_cidrsp(ext, m + 12, n, ks, fc);
+		on_cidrsp(ext, v, ks, fc);
 		return;
 	default:
 		break;
@@ -620,14 +630,14 @@ void tg_mle_rx(const uint8_t src[16], const uint8_t dst[16], uint8_t *m, uint16_
 	}
 	switch (m[11]) {
 	case C_CURSP:
-		on_cursp(m + 12, n);
+		on_cursp(v);
 		break;
 	case C_CUREQ:
-		on_cureq(m + 12, n);
+		on_cureq(v);
 		break;
 	case C_DRSP:
 	case C_ADV:
-		leader_seen(m + 12, n);
+		leader_seen(v);
 		break;
 	default:
 		break;

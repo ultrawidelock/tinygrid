@@ -61,7 +61,8 @@ void tg_plat_changed(void);
 
 enum { TG_TX_OK = 0, TG_TX_NOACK = 1, TG_TX_BUSY = 2 };
 
-/** A frame without its FCS. */
+/** A frame without its FCS, past the radio's filter on the PAN ID and
+ * destination address of tg_plat_radio_set() (as tg_phy_filter() does). */
 void tg_radio_rx(const uint8_t *psdu, uint8_t len, int8_t rssi);
 
 /** The frame passed to tg_plat_radio_tx() is done. @p pending: the ACK had

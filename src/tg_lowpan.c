@@ -5,7 +5,7 @@
  *
  * Decompression takes every form a router may send. Compression emits only
  * the forms this node needs: no traffic class, no flow label, UDP always
- * through NHC with its checksum carried.
+ * through NHC with its ports and checksum carried.
  */
 #include "tg_int.h"
 
@@ -492,29 +492,11 @@ uint8_t tg_iphc(uint8_t *out, const uint8_t *ip6, const struct tg_maddr *src,
 		q += 6;
 	}
 #endif
-	if (udp) {
-		uint16_t sp = get16(u), dp = get16(u + 2);
-
-		if ((sp & 0xfff0u) == 0xf0b0u && (dp & 0xfff0u) == 0xf0b0u) {
-			*q++ = 0xf3u;
-			*q++ = (uint8_t)((sp & 0xfu) << 4 | (dp & 0xfu));
-		} else if ((dp & 0xff00u) == 0xf000u) {
-			*q++ = 0xf1u;
-			memcpy(q, u, 2);
-			q[2] = (uint8_t)dp;
-			q += 3;
-		} else if ((sp & 0xff00u) == 0xf000u) {
-			*q++ = 0xf2u;
-			*q++ = (uint8_t)sp;
-			memcpy(q, u + 2, 2);
-			q += 2;
-		} else {
-			*q++ = 0xf0u;
-			memcpy(q, u, 4);
-			q += 4;
-		}
-		memcpy(q, u + 6, 2);
-		q += 2;
+	if (udp) { /* ports inline: the short forms need 0xf0xx, never this node's own */
+		*q++ = 0xf0u;
+		memcpy(q, u, 4);
+		memcpy(q + 4, u + 6, 2);
+		q += 6;
 	}
 
 	if (cid) {

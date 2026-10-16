@@ -298,7 +298,7 @@ void tg_radio_rx(const uint8_t *in, uint8_t len, int8_t rssi)
 {
 	uint8_t f[PSDU_MAX];
 	struct tg_maddr src = {0}, dst = {0};
-	uint16_t fcf, pan;
+	uint16_t fcf;
 	uint8_t i = 3, ver, type, hdr, kidx = 0;
 	uint32_t fc = 0;
 	bool dpan = true, span, sec;
@@ -326,25 +326,17 @@ void tg_radio_rx(const uint8_t *in, uint8_t len, int8_t rssi)
 		dpan = span;
 		span = false;
 	}
+	/* The radio matched the PAN ID and destination (tg_plat_radio_set());
+	 * the destination is kept for the IIDs 6LoWPAN derives from it. */
 	if (dpan) {
-		pan = le16(f + i);
 		i += 2;
-		if (pan != tg.pan && pan != 0xffffu) {
-			return;
-		}
 	}
 	if (dst.mode == 2u) {
 		dst.s = le16(f + i);
 		i += 2;
-		if (dst.s != 0xffffu && !(tg.role == TG_CHILD && dst.s == tg.rloc)) {
-			return;
-		}
 	} else {
 		rev8(dst.e, f + i);
 		i += 8;
-		if (memcmp(dst.e, tg.ext, 8) != 0) {
-			return;
-		}
 	}
 	if (span) {
 		i += 2;
