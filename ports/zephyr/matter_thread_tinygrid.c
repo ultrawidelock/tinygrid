@@ -27,6 +27,7 @@
 #endif
 
 #include <tinygrid/tg.h>
+#include <tinygrid/tg_plat.h>
 
 #include <tinygrid/tg_zephyr.h>
 
@@ -201,12 +202,72 @@ static struct op s_ops[MATTER_SUPPORTED_FABRICS];
 
 static struct {
 	bool want;
+	bool loaded, stale; /* tg/3 read this boot; svc is the last boot's record */
 	uint16_t disc, port;
 	char inst[17], s_sub[5], l_sub[7];
 	const char *subs[2];
 	uint8_t txt[64];
 	struct tg_srp_svc svc;
 } s_comm;
+
+/*
+ * The window record, kept in tg/3 from the moment it is registered until the
+ * window closes. Apple's border router keeps a commissionable record its node
+ * never removed well past its lease, and removing the host does not take it
+ * (tinytalk a029e57, 2026-10-16): a crash, power cut or reset with a window
+ * open leaves one that Home dials over Thread instead of using BLE. So the
+ * next boot registers that name again and removes it.
+ */
+struct comm_nv {
+	char inst[16];
+	uint16_t disc, port;
+};
+
+/* Register s_comm.inst as _matterc._udp. Lock held. */
+static void comm_register(uint16_t disc, uint16_t port)
+{
+	uint16_t n = 0;
+	char kv[24];
+
+	(void)snprintf(s_comm.s_sub, sizeof(s_comm.s_sub), "_S%u",
+		       (unsigned int)((disc >> 8) & 0x0fu));
+	(void)snprintf(s_comm.l_sub, sizeof(s_comm.l_sub), "_L%u", (unsigned int)(disc & 0x0fffu));
+	s_comm.subs[0] = s_comm.s_sub;
+	s_comm.subs[1] = s_comm.l_sub;
+	(void)snprintf(kv, sizeof(kv), "D=%u", (unsigned int)(disc & 0x0fffu));
+	n += txt(s_comm.txt + n, kv);
+	n += txt(s_comm.txt + n, "CM=2");
+	(void)snprintf(kv, sizeof(kv), "VP=%u+%u", (unsigned int)VENDOR_ID,
+		       (unsigned int)PRODUCT_ID);
+	n += txt(s_comm.txt + n, kv);
+	memcpy(s_comm.txt + n, s_mrp_txt, sizeof(s_mrp_txt) - 1u);
+	n += sizeof(s_mrp_txt) - 1u;
+	s_comm.svc = (struct tg_srp_svc){
+		.instance = s_comm.inst,
+		.type = "_matterc._udp",
+		.subtypes = s_comm.subs,
+		.nsub = 2,
+		.port = port,
+		.txt = s_comm.txt,
+		.txt_len = n,
+	};
+	(void)tg_srp_add(&s_comm.svc);
+}
+
+/* The last boot's record: removed once the server holds it again, then
+ * forgotten. Lock held. */
+static void comm_settle(void)
+{
+	if (!s_comm.stale) {
+		return;
+	}
+	if (s_comm.svc.state == TG_SRP_REG) {
+		(void)tg_srp_remove(&s_comm.svc);
+	} else if (s_comm.svc.state == TG_SRP_IDLE) {
+		s_comm.stale = false;
+		(void)tg_plat_save(TG_KV_WINDOW, NULL, 0);
+	}
+}
 
 static bool host_ready(void)
 {
@@ -269,10 +330,21 @@ static void reconcile(void)
 			break;
 		}
 	}
+	if (!s_comm.loaded) {
+		struct comm_nv nv;
+
+		s_comm.loaded = true;
+		if (tg_plat_load(TG_KV_WINDOW, &nv, sizeof(nv)) == (int)sizeof(nv) &&
+		    s_comm.svc.state == TG_SRP_IDLE) {
+			memcpy(s_comm.inst, nv.inst, sizeof(nv.inst));
+			s_comm.inst[16] = '\0';
+			s_comm.stale = true;
+			comm_register(nv.disc, nv.port);
+		}
+	}
 	if (s_comm.want && s_comm.svc.state == TG_SRP_IDLE) {
 		uint8_t r[8];
-		uint16_t n = 0;
-		char kv[24];
+		struct comm_nv nv = {.disc = s_comm.disc, .port = s_comm.port};
 
 		if (psa_generate_random(r, sizeof(r)) != PSA_SUCCESS) {
 			return;
@@ -280,36 +352,17 @@ static void reconcile(void)
 		for (int i = 0; i < 8; i++) {
 			(void)snprintf(s_comm.inst + 2 * i, 3, "%02X", r[i]);
 		}
-		(void)snprintf(s_comm.s_sub, sizeof(s_comm.s_sub), "_S%u",
-			       (unsigned int)((s_comm.disc >> 8) & 0x0fu));
-		(void)snprintf(s_comm.l_sub, sizeof(s_comm.l_sub), "_L%u",
-			       (unsigned int)(s_comm.disc & 0x0fffu));
-		s_comm.subs[0] = s_comm.s_sub;
-		s_comm.subs[1] = s_comm.l_sub;
-		(void)snprintf(kv, sizeof(kv), "D=%u", (unsigned int)(s_comm.disc & 0x0fffu));
-		n += txt(s_comm.txt + n, kv);
-		n += txt(s_comm.txt + n, "CM=2");
-		(void)snprintf(kv, sizeof(kv), "VP=%u+%u", (unsigned int)VENDOR_ID,
-			       (unsigned int)PRODUCT_ID);
-		n += txt(s_comm.txt + n, kv);
-		memcpy(s_comm.txt + n, s_mrp_txt, sizeof(s_mrp_txt) - 1u);
-		n += sizeof(s_mrp_txt) - 1u;
-		s_comm.svc = (struct tg_srp_svc){
-			.instance = s_comm.inst,
-			.type = "_matterc._udp",
-			.subtypes = s_comm.subs,
-			.nsub = 2,
-			.port = s_comm.port,
-			.txt = s_comm.txt,
-			.txt_len = n,
-		};
-		(void)tg_srp_add(&s_comm.svc);
+		/* Kept before the server has it: a crash in between is the case. */
+		memcpy(nv.inst, s_comm.inst, sizeof(nv.inst));
+		(void)tg_plat_save(TG_KV_WINDOW, &nv, sizeof(nv));
+		comm_register(s_comm.disc, s_comm.port);
 	}
 }
 
 /* A registration finished coming or going: a freed slot may be wanted. */
 void tg_zephyr_changed(void)
 {
+	comm_settle();
 	reconcile();
 	k_sem_give(&s_changed);
 }
@@ -379,6 +432,7 @@ int matter_thread_unadvertise_commissionable(void)
 	tg_zephyr_lock();
 	s_comm.want = false;
 	(void)tg_srp_remove(&s_comm.svc);
+	(void)tg_plat_save(TG_KV_WINDOW, NULL, 0);
 	tg_zephyr_unlock();
 	return MATTER_OK;
 }
@@ -399,6 +453,7 @@ void matter_thread_advertise_reset(void)
 		s_ops[i].want[0] = '\0';
 	}
 	s_comm.want = false;
+	s_comm.stale = s_comm.svc.state != TG_SRP_IDLE; /* tg/3 goes once it is removed */
 	tg_srp_reset(true); /* each service stays tinygrid's until it is removed */
 	tg_zephyr_unlock();
 }

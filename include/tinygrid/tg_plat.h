@@ -39,7 +39,11 @@ int tg_plat_srp_sign(const uint8_t *a, size_t alen, const uint8_t *b, size_t ble
 
 /** Persisted records. load returns the length read, or < 0 when absent;
  * save with len 0 deletes the record. */
-enum { TG_KV_STATE = 1, TG_KV_SRP = 2 /* a port's SRP key */ };
+enum {
+	TG_KV_STATE = 1,
+	TG_KV_SRP = 2,    /* a port's SRP key */
+	TG_KV_WINDOW = 3, /* matter_thread_tinygrid.c's window record */
+};
 int tg_plat_load(uint8_t key, void *buf, size_t len);
 int tg_plat_save(uint8_t key, const void *buf, size_t len);
 

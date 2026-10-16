@@ -315,6 +315,31 @@ def main():
 
         check('a sleepy child hears another child\'s multicast and answers it', two_children)
 
+        def window_reboot():
+            # A window record a killed node left is registered again under its
+            # name at the next start, and removed.
+            nonlocal tg
+            tg.send('srp add win1 _matterc._udp 5540 _S3 120')
+            tg.expect(r'^ev srp svc win1 state 2', 20)
+            assert services()['win1._matterc._udp'].get('deleted') == 'false'
+            tg.stop()
+            open(os.path.join(work, 'tg-1.out'), 'w').write('\n'.join(tg.log) + '\n')
+            tg = Node('tg', [a.tg, '2', str(a.poll), work], work)
+            tg.expect(r'^ev up')
+            tg.send('start ' + ds)
+            tg.expect(r'^ev state role=2 ready=1', 60)
+            t0 = time.monotonic()
+            tg.send('srp host tgnode')
+            tg.expect(r'^ev srp stale win1 0', 5)
+            tg.expect(r'^ev srp stale gone', 20)
+            print(f'     the last run\'s window record removed {time.monotonic() - t0:.2f} s '
+                  f'after the host was named', flush=True)
+            assert services()['win1._matterc._udp'].get('deleted') == 'true'
+            tg.send('srp add inst5 _matter._tcp 5540 _IFEDCBA9876543210')
+            tg.expect(r'^ev srp svc inst5 state 2', 20)
+
+        check('a window record left by a killed node goes at its next start', window_reboot)
+
         def lease_expiry():
             # Every service renews at 80% of the shortest lease. Once the node
             # stops, the 120 s record lapses on its own and the host, left on

@@ -6,7 +6,8 @@
  *   state                       role, ready, addresses
  *   udp <addr> <port> <text>    send from port 5540
  *   udpn <addr> <port> <n>      send n bytes from port 5540
- *   srp host <label>
+ *   srp host <label>            and register, then remove, a window record
+ *                               an earlier run left (key 3)
  *   srp add <instance> <type> <port> [subtype|-] [lease s]
  *   srp del <instance>
  *   srp reset                   remove each service by name, then the host
@@ -15,6 +16,9 @@
  *   clear                       tg_clear()
  *
  * Port 5540 echoes whatever it receives. Events print as "ev ...".
+ *
+ * A _matterc._udp service is kept in the store while registered, as
+ * ports/zephyr/matter_thread_tinygrid.c keeps its window record in tg/3.
  */
 #include "tg_host.h"
 
@@ -95,8 +99,26 @@ static const char *subp[NSVC][1];
 static char host[64];
 static const uint8_t txt[] = {7, 'S', 'I', 'I', '=', '5', '0', '0'};
 
+static int stale = -1; /* the slot holding an earlier run's window record */
+
+/* Remove the earlier run's record once the server holds it again. */
+static void stale_settle(void)
+{
+	if (stale < 0) {
+		return;
+	}
+	if (svc[stale].state == TG_SRP_REG) {
+		(void)tg_srp_remove(&svc[stale]);
+	} else if (svc[stale].state == TG_SRP_IDLE) {
+		printf("ev srp stale gone\n");
+		(void)tg_plat_save(3, NULL, 0);
+		stale = -1;
+	}
+}
+
 static void srp_states(void)
 {
+	stale_settle();
 	for (int i = 0; i < NSVC; i++) {
 		if (svc[i].instance) {
 			printf("ev srp svc %s state %u\n", svc[i].instance, svc[i].state);
@@ -152,6 +174,16 @@ static void cmd(char *l)
 		if (!strcmp(v[1], "host") && n == 3) {
 			snprintf(host, sizeof(host), "%s", v[2]);
 			printf("ev srp host %d\n", tg_srp_host(host));
+			memset(names[0], 0, sizeof(names[0]));
+			if (svc[0].state == TG_SRP_IDLE &&
+			    tg_plat_load(3, names[0], sizeof(names[0]) - 1u) > 0) {
+				snprintf(types[0], sizeof(types[0]), "_matterc._udp");
+				svc[0] = (struct tg_srp_svc){.instance = names[0], .type = types[0],
+							     .port = 5540, .txt = txt,
+							     .txt_len = sizeof(txt), .lease_s = 120};
+				stale = 0;
+				printf("ev srp stale %s %d\n", names[0], tg_srp_add(&svc[0]));
+			}
 		} else if (!strcmp(v[1], "add") && n >= 5) {
 			for (int i = 0; i < NSVC; i++) {
 				if (svc[i].state == TG_SRP_IDLE) {
@@ -171,6 +203,9 @@ static void cmd(char *l)
 						svc[i].nsub = 1;
 					}
 					printf("ev srp add %d\n", tg_srp_add(&svc[i]));
+					if (!strcmp(types[i], "_matterc._udp")) {
+						(void)tg_plat_save(3, names[i], strlen(names[i]));
+					}
 					break;
 				}
 			}
@@ -178,6 +213,9 @@ static void cmd(char *l)
 			for (int i = 0; i < NSVC; i++) {
 				if (svc[i].state != TG_SRP_IDLE && !strcmp(names[i], v[2])) {
 					printf("ev srp del %d\n", tg_srp_remove(&svc[i]));
+					if (!strcmp(types[i], "_matterc._udp")) {
+						(void)tg_plat_save(3, NULL, 0);
+					}
 				}
 			}
 		} else if (!strcmp(v[1], "reset")) {
