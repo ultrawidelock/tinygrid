@@ -3,7 +3,8 @@
  * Host unit tests: Thread key derivation and MLE encryption against the
  * Thread specification's vectors (as OpenThread's thread-cert test_crypto.py
  * carries them), AES-CCM* against PSA's own CCM on random inputs, and the
- * radio logic in tg_phy.c on frame headers OpenThread's simulation sent.
+ * radio logic in tg_phy.c on frame headers OpenThread's simulation sent, and
+ * the SRP client's updates against a server the test plays.
  * Interoperation itself is tests/sim/interop.py's job.
  */
 #include "tg_int.h"
@@ -218,6 +219,124 @@ static void test_phy(void)
 	CHECK(tg_phy_tx_us_max(125, false) == 36800u + 640u + 4256u);
 }
 
+/* ---- SRP ---------------------------------------------------------------- */
+
+/* What an update carries, read back from tg.pkt: it is built there and is
+ * still there once sent. */
+struct upd {
+	uint16_t id;
+	int ptr_add, ptr_del, wipe, srv;
+	uint32_t ttl, lease, klease;
+};
+
+static const uint8_t *skip_name(const uint8_t *p)
+{
+	while (*p) {
+		if ((*p & 0xc0u) == 0xc0u) {
+			return p + 2;
+		}
+		p += 1 + *p;
+	}
+	return p + 1;
+}
+
+static struct upd upd(void)
+{
+	const uint8_t *b = tg.pkt, *p = skip_name(b + 12) + 4; /* past the zone */
+	struct upd u = {.id = get16(b)};
+
+	for (uint16_t i = 0; i < get16(b + 8); i++) {
+		uint16_t type, cls;
+
+		p = skip_name(p);
+		type = get16(p);
+		cls = get16(p + 2);
+		if (type == 12u) { /* PTR */
+			*(cls == 254u ? &u.ptr_del : &u.ptr_add) += 1;
+		} else if (type == 255u) {
+			u.wipe++;
+		} else if (type == 33u) {
+			u.srv++;
+			u.ttl = get32(p + 4);
+		}
+		p += 10 + get16(p + 8);
+	}
+	p = skip_name(p); /* the OPT, first of the additional records */
+	if (get16(p) == 41u) {
+		u.lease = get32(p + 14);
+		u.klease = get32(p + 18);
+	}
+	return u;
+}
+
+static uint16_t srp_sent; /* id of the last update answered, to tell a new one */
+
+/* Run the client until it sends, then answer as a server granting the
+ * lease asked. Returns the update, or one with id 0 if nothing new went. */
+static struct upd srp_step(bool answer)
+{
+	uint8_t r[12] = {0};
+	struct upd u;
+
+	tg.due[T_SRP] = tg_plat_now();
+	(void)tg_process();
+	u = upd();
+	if (u.id == srp_sent) {
+		return (struct upd){0};
+	}
+	srp_sent = u.id;
+	if (answer) {
+		put16(r, u.id);
+		put16(r + 2, 0xa800u); /* response, UPDATE, NOERROR */
+		tg_srp_rx(r, sizeof(r));
+	}
+	return u;
+}
+
+/* A child with an off-mesh address and an SRP server, as attaching leaves it. */
+static void srp_attached(void)
+{
+	(void)tg_init(0);
+	tg.role = TG_CHILD;
+	tg.ds_len = 1;
+	tg.have_omr = tg.omr_reg = true;
+	tg.omr[0] = 0xfdu;
+	tg.srp_addr[0] = 0xfdu;
+	tg.srp_addr[15] = 1;
+	tg.srp_port = 53;
+	tg.have_srp = true;
+	memset(tg.pkt, 0, 2);
+	srp_sent = 0;
+}
+
+static const char *const s_sub[] = {"_I0123456789ABCDEF"};
+static const uint8_t s_txt[] = {7, 'S', 'I', 'I', '=', '5', '0', '0'};
+
+static void test_srp_leases(void)
+{
+	struct tg_srp_svc op = {.instance = "op", .type = "_matter._tcp", .subtypes = s_sub,
+				.nsub = 1, .port = 5540, .txt = s_txt, .txt_len = sizeof(s_txt)};
+	struct tg_srp_svc comm = {.instance = "comm", .type = "_matterc._udp", .port = 5540,
+				  .txt = s_txt, .txt_len = sizeof(s_txt), .lease_s = 120};
+	struct upd u;
+
+	srp_attached();
+	CHECK(tg_srp_host("host") == TG_OK);
+	CHECK(tg_srp_add(&op) == TG_OK);
+	CHECK(tg_srp_add(&comm) == TG_OK);
+	/* Shortest lease first, each in an update of its own; one key lease. */
+	u = srp_step(true);
+	CHECK(u.lease == 120u && u.ttl == 120u && u.srv == 1 && u.klease == 7200u);
+	CHECK(comm.state == TG_SRP_REG && op.state == TG_SRP_ADD);
+	u = srp_step(true);
+	CHECK(u.lease == 7200u && u.ttl == 7200u && u.srv == 1 && u.ptr_add == 2);
+	CHECK(op.state == TG_SRP_REG);
+	/* The round is done: both renew at 80% of 120 s. */
+	CHECK((tg.armed & (1u << T_SRP)) && tg.due[T_SRP] - tg_plat_now() <= 96000u &&
+	      tg.due[T_SRP] - tg_plat_now() > 95000u);
+	tg_srp_reset(false);
+}
+
 int main(void)
 {
 	if (psa_crypto_init() != PSA_SUCCESS) {
@@ -227,6 +346,7 @@ int main(void)
 	test_mle_vector();
 	test_ccm_vs_psa();
 	test_phy();
+	test_srp_leases();
 	printf("%d/%d checks passed\n", checks - fails, checks);
 	return fails ? 1 : 0;
 }

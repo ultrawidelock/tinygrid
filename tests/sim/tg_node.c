@@ -7,7 +7,7 @@
  *   udp <addr> <port> <text>    send from port 5540
  *   udpn <addr> <port> <n>      send n bytes from port 5540
  *   srp host <label>
- *   srp add <instance> <type> <port> [subtype]
+ *   srp add <instance> <type> <port> [subtype|-] [lease s]
  *   srp del <instance>
  *   srp reset                   remove host and services from the server
  *   mcast <port> <text>         send to ff03::1 from port 5540
@@ -112,10 +112,10 @@ static int hexval(char c)
 
 static void cmd(char *l)
 {
-	char *v[6] = {0};
+	char *v[7] = {0};
 	int n = 0;
 
-	for (char *t = strtok(l, " \t\r\n"); t && n < 6; t = strtok(NULL, " \t\r\n")) {
+	for (char *t = strtok(l, " \t\r\n"); t && n < 7; t = strtok(NULL, " \t\r\n")) {
 		v[n++] = t;
 	}
 	if (n == 0) {
@@ -162,7 +162,8 @@ static void cmd(char *l)
 					svc[i].txt = txt;
 					svc[i].txt_len = sizeof(txt);
 					svc[i].nsub = 0;
-					if (n == 6) {
+					svc[i].lease_s = n == 7 ? (uint32_t)atoi(v[6]) : 0u;
+					if (n >= 6 && strcmp(v[5], "-") != 0) {
 						snprintf(subs[i], sizeof(subs[i]), "%s", v[5]);
 						subp[i][0] = subs[i];
 						svc[i].subtypes = subp[i];

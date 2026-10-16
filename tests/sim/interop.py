@@ -7,7 +7,7 @@ routable prefix; a tinygrid node is handed the leader's dataset and has to
 attach, answer pings, carry UDP both ways (fragmented too) and register a
 service the server then lists.
 
-Usage: interop.py --ot <ot-cli-ftd> --tg <tg_node> [--poll MS] [--keepalive]
+Usage: interop.py --ot <ot-cli-ftd> --tg <tg_node> [--poll MS] [--keepalive] [--lease]
 """
 import argparse
 import ipaddress
@@ -91,6 +91,8 @@ def main():
     ap.add_argument('--tg', required=True)
     ap.add_argument('--poll', type=int, default=0, help='0 for an rx-on child, else SED poll ms')
     ap.add_argument('--keepalive', action='store_true', help='also wait out one keep-alive')
+    ap.add_argument('--lease', action='store_true',
+                    help='also wait out a 120 s SRP lease the node stops renewing')
     ap.add_argument('--robust', action='store_true',
                     help='key rotation, prefix change, leader reset, parent loss '
                          '(needs a node built with a 12 s child timeout)')
@@ -215,6 +217,33 @@ def main():
 
         check('SRP removes one service', srp_remove)
 
+        def services():
+            """The leader's SRP services: instance -> {deleted, lease, subtypes}."""
+            ot.drain()
+            n0 = len(ot.log)
+            ot.send('srp server service')
+            ot.expect(r'^Done', 5)
+            out, cur = {}, None
+            for line in ot.log[n0:]:
+                m = re.match(r'^(\S+)\.default\.service\.arpa\.$', line)
+                if m:
+                    cur = out.setdefault(m.group(1), {})
+                    continue
+                m = re.match(r'^\s+(deleted|lease|subtypes): (\S+)$', line)
+                if m and cur is not None:
+                    cur[m.group(1)] = m.group(2)
+            return out
+
+        def srp_lease():
+            tg.send('srp add inst3 _matterc._udp 5540 _L840 120')
+            tg.expect(r'^ev srp svc inst3 state 2', 20)
+            time.sleep(1)  # the round's last update, inst2's lease
+            svc = services()
+            assert svc['inst3._matterc._udp'].get('lease') == '120', svc
+            assert svc['inst2._matterc._udp'].get('lease') == '7200', svc
+
+        check('SRP gives a 120 s lease its own update', srp_lease)
+
         def resolve():
             tg.send('resolve inst2 _matterc._udp')
             m = tg.expect(r'^ev dns (ok \S+ \d+|fail -?\d+)', 15)
@@ -268,6 +297,33 @@ def main():
                 tg2.stop()
 
         check('a sleepy child hears another child\'s multicast and answers it', two_children)
+
+        def lease_expiry():
+            # Every service renews at 80% of the shortest lease. Once the node
+            # stops, the 120 s record lapses on its own and the host, left on
+            # the longest lease by the last update of each round, stays.
+            tg.send('srp del inst3')
+            tg.expect(r'^ev srp svc inst3 state 0', 20)
+            tg.send('srp add inst3 _matterc._udp 5540 _L840 120')
+            tg.expect(r'^ev srp svc inst3 state 2', 20)
+            t0 = time.monotonic()
+            time.sleep(1)
+            tg.stop()
+            while services()['inst3._matterc._udp'].get('deleted') != 'true':
+                if time.monotonic() - t0 > 180:
+                    raise TimeoutError('the 120 s record never lapsed')
+                time.sleep(1)
+            t = time.monotonic() - t0
+            print(f'     120 s record gone {t:.0f} s after its last update', flush=True)
+            assert 110 <= t <= 135, f'{t:.0f} s'
+            assert services()['inst2._matterc._udp'].get('deleted') == 'false'
+            ot.drain()
+            ot.send('srp server host')
+            ot.expect(r'^tgnode\.default\.service\.arpa\.', 5)
+            ot.expect(r'deleted: false', 5)
+
+        if a.lease:
+            check('a 120 s lease lapses when the node stops; a 7,200 s one stays', lease_expiry)
 
         if a.robust:
             def keyrot():

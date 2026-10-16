@@ -10,7 +10,7 @@
  */
 #include "tg_int.h"
 
-#ifndef TG_SRP_LEASE_S
+#ifndef TG_SRP_LEASE_S /* CONFIG_TINYGRID_SRP_LEASE_S in a Zephyr build */
 #define TG_SRP_LEASE_S 7200u /* OPENTHREAD_CONFIG_SRP_CLIENT_DEFAULT_LEASE */
 #endif
 #ifndef TG_SRP_KEY_LEASE_S
@@ -33,7 +33,9 @@
 static const char *host;
 static struct tg_srp_svc *svcs;
 static uint16_t msg_id;
-static uint32_t granted = TG_SRP_LEASE_S;
+/* The lease of the update in flight, 0 for the host's removal; and of this
+ * round of updates, the last lease answered and the shortest granted. */
+static uint32_t cur, round_lease, round_min;
 static uint8_t backoff;
 static bool waiting, registered, drop_host;
 
@@ -72,6 +74,27 @@ static uint8_t *rr(uint8_t *p, uint16_t type, uint16_t cls, uint32_t ttl, uint16
 static void rdlen(uint8_t *after_rr, uint8_t *end)
 {
 	put16(after_rr - 2, (uint16_t)(end - after_rr));
+}
+
+static uint32_t lease_of(const struct tg_srp_svc *s)
+{
+	return s->lease_s ? s->lease_s : TG_SRP_LEASE_S;
+}
+
+/* The next update of this round: the shortest lease above the last one
+ * answered, 0 when every lease has had its update. */
+static uint32_t next_group(void)
+{
+	uint32_t best = 0;
+
+	for (struct tg_srp_svc *s = svcs; s; s = s->next) {
+		uint32_t l = lease_of(s);
+
+		if (s->state != TG_SRP_IDLE && l > round_lease && (best == 0u || l < best)) {
+			best = l;
+		}
+	}
+	return best;
 }
 
 void tg_srp_kick(uint32_t delay_ms)
@@ -123,6 +146,7 @@ void tg_srp_reset(bool tell_server)
 		s->state = TG_SRP_IDLE;
 	}
 	svcs = NULL;
+	round_lease = 0;
 	drop_host = tell_server && registered;
 	if (drop_host) {
 		tg_srp_kick(0);
@@ -136,9 +160,16 @@ static uint16_t build(void)
 {
 	uint8_t *b = tg.pkt, *p = b + 12, *v;
 	uint16_t zone, hoff = 0, nup = 0, sig;
-	uint32_t lease = drop_host ? 0u : TG_SRP_LEASE_S;
-	uint32_t ttl = TG_SRP_LEASE_S;
+	uint32_t ttl = cur ? cur : TG_SRP_LEASE_S, klease = TG_SRP_KEY_LEASE_S;
 	uint8_t addr[16], key[64], *rd;
+
+	/* One key lease in every update, the longest of them all: a key lease
+	 * may not be shorter than a lease. */
+	for (struct tg_srp_svc *s = svcs; s; s = s->next) {
+		if (s->state != TG_SRP_IDLE && lease_of(s) > klease) {
+			klease = lease_of(s);
+		}
+	}
 
 	if (tg_plat_srp_pub(key) != 0) {
 		return 0;
@@ -158,11 +189,12 @@ static uint16_t build(void)
 	put16(p + 2, CL_IN);
 	p += 4;
 
-	for (struct tg_srp_svc *s = drop_host ? NULL : svcs; s; s = s->next) {
+	for (struct tg_srp_svc *s = svcs; s; s = s->next) {
 		bool del = s->state == TG_SRP_DEL;
 		uint16_t soff, ioff, suboff = 0;
 
-		s->sent = s->state;
+		/* The services of this update's lease, and no others. */
+		s->sent = cur && lease_of(s) == cur ? s->state : TG_SRP_IDLE;
 		if (s->sent == TG_SRP_IDLE) {
 			continue;
 		}
@@ -241,8 +273,8 @@ static uint16_t build(void)
 	p = rr(p, RT_OPT, 1232, 0x00008000u, 12); /* DO bit */
 	put16(p, 2);                              /* Update Lease */
 	put16(p + 2, 8);
-	put32(p + 4, lease);
-	put32(p + 8, drop_host ? 0u : TG_SRP_KEY_LEASE_S);
+	put32(p + 4, cur);
+	put32(p + 8, cur ? klease : 0u);
 	p += 12;
 
 	/* SIG(0), RFC 2931: sign the RDATA (signer name uncompressed, no
@@ -284,6 +316,13 @@ void tg_srp_timer(void)
 	if (!work && !waiting && !registered) {
 		return;
 	}
+	if (!waiting) {
+		/* A retry or a timeout sends the same lease again. */
+		cur = drop_host ? 0u : next_group();
+		if (cur == 0u && !drop_host) {
+			cur = TG_SRP_LEASE_S; /* no service: the host alone */
+		}
+	}
 	if (tg.r_busy) {
 		tg_arm(T_SRP, 200); /* the buffer is holding a reassembly */
 		return;
@@ -318,6 +357,7 @@ void tg_srp_rx(const uint8_t *m, uint16_t n)
 {
 	const uint8_t *p = m + 12, *end = m + n;
 	struct tg_srp_svc **pp;
+	uint32_t granted = cur;
 	uint16_t skip;
 	bool more;
 
@@ -330,7 +370,6 @@ void tg_srp_rx(const uint8_t *m, uint16_t n)
 		return;
 	}
 	backoff = 0;
-	granted = TG_SRP_LEASE_S;
 	/* The granted lease, from the OPT record among the additional records. */
 	skip = (uint16_t)(get16(m + 4) + get16(m + 6) + get16(m + 8));
 	for (uint16_t i = 0; p && i < get16(m + 4); i++) {
@@ -350,7 +389,7 @@ void tg_srp_rx(const uint8_t *m, uint16_t n)
 		p += 10 + get16(p + 8);
 	}
 
-	if (drop_host) {
+	if (cur == 0u) {
 		drop_host = false;
 		registered = false;
 		if (svcs) {
@@ -365,8 +404,11 @@ void tg_srp_rx(const uint8_t *m, uint16_t n)
 		uint8_t sent = s->sent;
 
 		s->sent = TG_SRP_IDLE;
-		if (sent == TG_SRP_IDLE || (s->state != sent && s->state != TG_SRP_REG)) {
-			more = true; /* added, or changed, while this was in flight */
+		if (sent == TG_SRP_IDLE) {
+			/* another lease's, or added while this was in flight */
+			more |= s->state != TG_SRP_REG && lease_of(s) <= cur;
+		} else if (s->state != sent && s->state != TG_SRP_REG) {
+			more = true; /* changed while this was in flight */
 		} else if (s->state == TG_SRP_DEL) {
 			s->state = TG_SRP_IDLE;
 			*pp = s->next;
@@ -377,7 +419,16 @@ void tg_srp_rx(const uint8_t *m, uint16_t n)
 		pp = &s->next;
 	}
 	registered = true;
-	/* renew at 80% of the lease */
-	tg_arm(T_SRP, more ? 0u : (granted ? granted : TG_SRP_LEASE_S) * 800u);
+	granted = granted ? granted : cur;
+	round_min = round_lease == 0u || granted < round_min ? granted : round_min;
+	round_lease = cur;
+	if (next_group() != 0u) {
+		tg_arm(T_SRP, 0); /* the next lease's update */
+	} else {
+		/* Round done: again at once if something changed under an update
+		 * already answered, else renew at 80% of the shortest lease. */
+		round_lease = 0;
+		tg_arm(T_SRP, more ? 0u : round_min * 800u);
+	}
 	tg_plat_changed();
 }

@@ -121,6 +121,10 @@ enum tg_srp_state {
  * One service instance, owned by the caller until tinygrid reports it
  * TG_SRP_IDLE again. Names are single labels; @p type is the two labels
  * "_service._proto"; @p txt is DNS TXT rdata (length-prefixed strings).
+ *
+ * Services of one lease share an update; each distinct lease is an update of
+ * its own, shortest first, so the host is left on the longest. All of them
+ * renew together, at 80% of the shortest lease granted.
  */
 struct tg_srp_svc {
 	const char *instance;
@@ -130,6 +134,7 @@ struct tg_srp_svc {
 	uint16_t port;
 	const uint8_t *txt;
 	uint16_t txt_len;
+	uint32_t lease_s; /* seconds; 0 for the default, CONFIG_TINYGRID_SRP_LEASE_S */
 	uint8_t state; /* enum tg_srp_state, owned by tinygrid */
 	uint8_t sent;  /* owned by tinygrid: the state the update in flight carries */
 	struct tg_srp_svc *next;

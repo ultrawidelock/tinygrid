@@ -62,6 +62,14 @@ config TINYGRID_CHILD_TIMEOUT
 	  How long the parent keeps this child without hearing from it. The
 	  child sends a keep-alive 4 s before it runs out.
 
+config TINYGRID_SRP_LEASE_S
+	int "SRP lease (s) of a service that names none"
+	default 7200
+	help
+	  The lease an SRP update asks for a service whose lease_s is 0,
+	  and for a host with no service. 7,200 s is OpenThread's client
+	  default (OPENTHREAD_CONFIG_SRP_CLIENT_DEFAULT_LEASE).
+
 config TINYGRID_TX_POWER
 	int "Transmit power (dBm)"
 	default 0

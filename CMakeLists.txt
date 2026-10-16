@@ -31,6 +31,7 @@ if(CONFIG_TINYGRID)
     zephyr_library_compile_definitions(TG_SED=0)
   endif()
   zephyr_library_compile_definitions(TG_CHILD_TIMEOUT_S=${CONFIG_TINYGRID_CHILD_TIMEOUT}u)
+  zephyr_library_compile_definitions(TG_SRP_LEASE_S=${CONFIG_TINYGRID_SRP_LEASE_S}u)
   # Nordic's driver's defaults build delayed transmit and receive and frame
   # timestamps, for CSL and time sync. A Thread 1.1 child uses neither, and
   # Zephyr exposes no Kconfig for them.

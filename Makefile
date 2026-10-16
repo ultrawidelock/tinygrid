@@ -54,7 +54,7 @@ $(BUILD)/tg_node_fast: $(CORE) ports/host/tg_host.c tests/sim/tg_node.c $(HDRS)
 		tests/sim/tg_node.c -o $@ $(CRYPTO_LIB)
 
 interop: $(BUILD)/tg_node $(BUILD)/tg_node_fast
-	python3 -I tests/sim/interop.py --ot $(OT_CLI) --tg $(BUILD)/tg_node
+	python3 -I tests/sim/interop.py --ot $(OT_CLI) --tg $(BUILD)/tg_node --lease
 	python3 -I tests/sim/interop.py --ot $(OT_CLI) --tg $(BUILD)/tg_node --poll 500
 	python3 -I tests/sim/interop.py --ot $(OT_CLI) --tg $(BUILD)/tg_node_fast --robust
 
