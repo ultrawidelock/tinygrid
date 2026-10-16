@@ -2,10 +2,13 @@
 /*
  * Host unit tests: Thread key derivation and MLE encryption against the
  * Thread specification's vectors (as OpenThread's thread-cert test_crypto.py
- * carries them), and AES-CCM* against PSA's own CCM on random inputs.
+ * carries them), AES-CCM* against PSA's own CCM on random inputs, and the
+ * radio logic in tg_phy.c on frame headers OpenThread's simulation sent.
  * Interoperation itself is tests/sim/interop.py's job.
  */
 #include "tg_int.h"
+
+#include <tinygrid/tg_phy.h>
 
 #include <psa/crypto.h>
 #include <stdio.h>
@@ -147,6 +150,73 @@ static void test_ccm_vs_psa(void)
 	}
 }
 
+static uint8_t unhex(uint8_t *out, const char *h)
+{
+	uint8_t n = 0;
+
+	for (; h[0] && h[1]; h += 2) {
+		unsigned v;
+
+		sscanf(h, "%2x", &v);
+		out[n++] = (uint8_t)v;
+	}
+	return n;
+}
+
+static int filt(const struct tg_phy_addr *a, const char *h)
+{
+	uint8_t f[127];
+
+	return tg_phy_filter(a, f, unhex(f, h));
+}
+
+static void test_phy(void)
+{
+	/* The child 0x1801 of PAN 0xface, extended address 66ad91dcc05b34f6. */
+	static const uint8_t ext[8] = {0x66, 0xad, 0x91, 0xdc, 0xc0, 0x5b, 0x34, 0xf6};
+	static const uint8_t other[8] = {0x66, 0xad, 0x91, 0xdc, 0xc0, 0x5b, 0x34, 0xf7};
+	struct tg_phy_addr a;
+	uint8_t f[8];
+	bool p;
+
+	tg_phy_addr_set(&a, 0xface, 0x1801, ext);
+	/* Data from the parent 0x1800, secured, ACK requested. */
+	CHECK(filt(&a, "79983dcefa011800180d0900000001") == TG_PHY_ACK);
+	CHECK(filt(&a, "49985ccefaffff00180d28000000") == TG_PHY_KEEP); /* broadcast */
+	CHECK(filt(&a, "69dc38cefaf6345bc0dc91ad666655b7476251ac9e0d05") == TG_PHY_ACK);
+	CHECK(filt(&a, "6b9805cefa001802180d0200") == TG_PHY_DROP); /* another child's poll */
+	CHECK(filt(&a, "6bd802cefa0018f01dcfb4c61e17160d00") == TG_PHY_DROP);
+	CHECK(filt(&a, "020061") == TG_PHY_DROP);                     /* an ACK */
+	CHECK(filt(&a, "79983dcefa01") == TG_PHY_DROP);               /* cut short */
+	CHECK(filt(&a, "79a83dcefa011800180d09") == TG_PHY_DROP);     /* 2015, ACK requested */
+	CHECK(filt(&a, "799a3dcefa011800180d09") == TG_PHY_DROP);     /* header IEs */
+	CHECK(filt(&a, "41ec07f6345bc0dc91ad666655b7476251ac9e") == TG_PHY_KEEP); /* 2015, no PAN */
+	tg_phy_addr_set(&a, 0xface, 0x1802, other);
+	CHECK(filt(&a, "79983dcefa011800180d0900000001") == TG_PHY_DROP);
+	CHECK(filt(&a, "69dc38cefaf6345bc0dc91ad666655b7476251ac9e0d05") == TG_PHY_DROP);
+	tg_phy_addr_set(&a, 0xbeef, 0x1801, ext);
+	CHECK(filt(&a, "79983dcefa011800180d0900000001") == TG_PHY_DROP);
+	tg_phy_addr_set(&a, 0xface, 0xfffe, ext); /* not attached yet */
+	CHECK(filt(&a, "79983dcefafeff00180d09") == TG_PHY_DROP);
+	CHECK(filt(&a, "49985ccefaffff00180d28") == TG_PHY_KEEP);
+
+	tg_phy_ack(f, 0x3d);
+	CHECK(f[0] == 0x02 && f[1] == 0x00 && f[2] == 0x3d);
+	CHECK(tg_phy_ack_rx(f, 3, 0x3d, &p) && !p);
+	CHECK(tg_phy_ack_rx(f, unhex(f, "121003"), 0x03, &p) && p); /* OpenThread's, pending */
+	CHECK(!tg_phy_ack_rx(f, 3, 0x04, &p));
+	CHECK(!tg_phy_ack_rx(f, unhex(f, "022003"), 0x03, &p)); /* 2015: enhanced */
+
+	CHECK(tg_phy_backoff_us(0, 0) == 0u);
+	CHECK(tg_phy_backoff_us(0, UINT32_MAX) == 7u * 320u);
+	CHECK(tg_phy_backoff_us(2, UINT32_MAX) == 31u * 320u);
+	CHECK(tg_phy_backoff_us(4, UINT32_MAX) == 31u * 320u);
+	CHECK(tg_phy_air_us(125) == 4256u); /* 127 B PSDU */
+	/* (7 + 15 + 31 + 31 + 31) backoffs of 320 us, 5 CCAs, the frame, the ACK. */
+	CHECK(tg_phy_tx_us_max(125, true) == 36800u + 640u + 4256u + 864u);
+	CHECK(tg_phy_tx_us_max(125, false) == 36800u + 640u + 4256u);
+}
+
 int main(void)
 {
 	if (psa_crypto_init() != PSA_SUCCESS) {
@@ -155,6 +225,7 @@ int main(void)
 	test_keys();
 	test_mle_vector();
 	test_ccm_vs_psa();
+	test_phy();
 	printf("%d/%d checks passed\n", checks - fails, checks);
 	return fails ? 1 : 0;
 }

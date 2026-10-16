@@ -21,7 +21,8 @@ tinytalk and ultrawidelock (which adds `matter_thread_resolve()`).
 ## Layout
 
 ```
-include/tinygrid/   tg.h (the API) and tg_plat.h (what a port provides)
+include/tinygrid/   tg.h (the API), tg_plat.h (what a port provides) and
+                    tg_phy.h (radio logic for a port without a vendor driver)
 src/                the stack, portable C11: MAC, 6LoWPAN, IPv6, MLE, SRP
 ports/psa/          AES, HMAC and the SRP key on PSA Crypto
 ports/zephyr/       the nRF 802.15.4 radio driver, settings, a thread;
@@ -36,7 +37,7 @@ baseline/           size measurement of the OpenThread it replaces
 
 | Command | What it does |
 |---|---|
-| `make test` | Unit tests: the Thread spec's key-derivation vectors, OpenThread's MLE encryption vector, AES-CCM* against PSA |
+| `make test` | Unit tests: the Thread spec's key-derivation vectors, OpenThread's MLE encryption vector, AES-CCM* against PSA, the radio's frame filter and timing |
 | `make interop` | A host node against an OpenThread leader on its simulated radio: rx-on, sleepy, then key rotation, keep-alive, prefix change, leader reboot and parent loss; DNS-SD and realm-local multicast, child to child included |
 | `baseline/build.sh <tinytalk> <dir> tinygrid` | tinytalk's door-lock on the DWM3001CDK with tinygrid, from inside an nRF Connect SDK v3.3.0 workspace |
 

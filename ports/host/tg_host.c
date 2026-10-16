@@ -7,12 +7,14 @@
  * The simulation radio (openthread examples/platforms/simulation) sends every
  * frame as one UDP datagram, [channel][PSDU with FCS], to 224.0.0.116 port
  * 9000 from port 9000 + node id, on 127.0.0.1. There is no hardware, so this
- * file does what a radio does: address filtering, ACKs, and the ACK wait.
+ * file does what a radio does: address filtering and ACKs (tg_phy.h), and
+ * the ACK wait.
  */
 #define _DEFAULT_SOURCE
 #include "tg_host.h"
 
 #include <tinygrid/tg.h>
+#include <tinygrid/tg_phy.h>
 #include <tinygrid/tg_plat.h>
 
 #include <arpa/inet.h>
@@ -35,8 +37,7 @@ static struct sockaddr_in group;
 static const char *kv_dir = ".";
 
 static uint8_t r_chan = 11;
-static uint16_t r_pan = 0xffffu, r_short = 0xfffeu;
-static uint8_t r_ext[8];
+static struct tg_phy_addr r_addr = {.pan = 0xffffu, .short_addr = 0xfffeu};
 static bool r_on;
 
 static bool ack_wait, done_pending, done_pend_fp;
@@ -92,9 +93,7 @@ int tg_plat_save(uint8_t key, const void *buf, size_t len)
 void tg_plat_radio_set(uint8_t channel, uint16_t pan, uint16_t short_addr, const uint8_t ext[8])
 {
 	r_chan = channel;
-	r_pan = pan;
-	r_short = short_addr;
-	memcpy(r_ext, ext, 8);
+	tg_phy_addr_set(&r_addr, pan, short_addr, ext);
 }
 
 void tg_plat_radio_rx(bool on)
@@ -161,34 +160,6 @@ int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len)
 	return 0;
 }
 
-/* What a radio's frame filter accepts; true also says whether to ACK. */
-static bool filter(const uint8_t *f, uint8_t len, bool *ack)
-{
-	uint16_t fcf = (uint16_t)(f[0] | f[1] << 8);
-	uint8_t dam = (fcf >> 10) & 3u, i = 3;
-	uint16_t pan, s;
-	uint8_t e[8];
-
-	if (len < 5u || dam < 2u) {
-		return false;
-	}
-	pan = (uint16_t)(f[i] | f[i + 1] << 8);
-	i += 2;
-	if (pan != r_pan && pan != 0xffffu) {
-		return false;
-	}
-	if (dam == 2u) {
-		s = (uint16_t)(f[i] | f[i + 1] << 8);
-		*ack = (fcf & 0x20u) && s != 0xffffu;
-		return s == 0xffffu || (s == r_short && r_short != 0xfffeu);
-	}
-	for (int k = 0; k < 8; k++) {
-		e[k] = f[i + 7 - k];
-	}
-	*ack = (fcf & 0x20u) != 0u;
-	return memcmp(e, r_ext, 8) == 0;
-}
-
 static void sim_rx(void)
 {
 	uint8_t m[256];
@@ -196,7 +167,8 @@ static void sim_rx(void)
 	socklen_t fl = sizeof(from);
 	ssize_t n = recvfrom(rx_fd, m, sizeof(m), 0, (struct sockaddr *)&from, &fl);
 	uint8_t *f = m + 1, len;
-	bool ack = false;
+	bool pending;
+	int keep;
 
 	if (n < 6 || ntohs(from.sin_port) == PORT_BASE + node || m[0] != r_chan) {
 		return;
@@ -204,18 +176,20 @@ static void sim_rx(void)
 	len = (uint8_t)(n - 3); /* channel byte and FCS */
 	trace("rx ", f, len);
 	if ((f[0] & 7u) == 2u) { /* an ACK */
-		if (ack_wait && len >= 3u && f[2] == ack_seq) {
+		if (ack_wait && tg_phy_ack_rx(f, len, ack_seq, &pending)) {
 			ack_wait = false;
-			tg_radio_tx_done(TG_TX_OK, (f[0] & 0x10u) != 0u);
+			tg_radio_tx_done(TG_TX_OK, pending);
 		}
 		return;
 	}
-	if (!r_on || !filter(f, len, &ack)) {
+	keep = r_on ? tg_phy_filter(&r_addr, f, len) : TG_PHY_DROP;
+	if (keep == TG_PHY_DROP) {
 		return;
 	}
-	if (ack) {
-		uint8_t a[3] = {0x02, 0x00, f[2]};
+	if (keep == TG_PHY_ACK) {
+		uint8_t a[3];
 
+		tg_phy_ack(a, f[2]);
 		sim_send(a, 3);
 	}
 	tg_radio_rx(f, len, -20);
