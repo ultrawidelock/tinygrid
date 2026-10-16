@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: ISC */
 /*
  * tg_plat.h's crypto on PSA Crypto: AES-ECB, HMAC-SHA-256 and the SRP host
- * key, all through calls a Matter node links anyway.
+ * key, all through calls a Matter node links anyway. HMAC is built on the
+ * hash, since psa_mac_compute() would link PSA's MAC layer for this alone.
  *
  * The SRP key is volatile and its private half is kept in tg_plat_save() under
  * TG_KV_SRP, so no persistent-key storage is needed from the crypto library.
@@ -13,6 +14,11 @@
 #include <stdbool.h>
 #include <string.h>
 
+#ifndef TG_PSA_AES /* 0 when the port has its own tg_plat_aes() */
+#define TG_PSA_AES 1
+#endif
+
+#if TG_PSA_AES
 /* Two keys alternate all day (MLE and MAC); cache both. */
 static struct {
 	psa_key_id_t id;
@@ -55,21 +61,29 @@ void tg_plat_aes(const uint8_t key[16], const uint8_t in[16], uint8_t out[16])
 		memset(out, 0, 16);
 	}
 }
+#endif
 
+/* RFC 2104: SHA-256(key ^ opad || SHA-256(key ^ ipad || msg)). */
 void tg_plat_hmac(const uint8_t key[16], const uint8_t *msg, size_t len, uint8_t out[32])
 {
-	psa_key_attributes_t a = PSA_KEY_ATTRIBUTES_INIT;
-	psa_key_id_t id;
-	size_t olen;
+	uint8_t pad[64];
+	size_t n;
 
-	psa_set_key_type(&a, PSA_KEY_TYPE_HMAC);
-	psa_set_key_bits(&a, 128);
-	psa_set_key_usage_flags(&a, PSA_KEY_USAGE_SIGN_MESSAGE);
-	psa_set_key_algorithm(&a, PSA_ALG_HMAC(PSA_ALG_SHA_256));
-	memset(out, 0, 32);
-	if (psa_import_key(&a, key, 16, &id) == PSA_SUCCESS) {
-		(void)psa_mac_compute(id, PSA_ALG_HMAC(PSA_ALG_SHA_256), msg, len, out, 32, &olen);
-		(void)psa_destroy_key(id);
+	for (int outer = 0; outer < 2; outer++) {
+		psa_hash_operation_t h = PSA_HASH_OPERATION_INIT;
+
+		memset(pad, outer ? 0x5c : 0x36, sizeof(pad));
+		for (int i = 0; i < 16; i++) {
+			pad[i] ^= key[i];
+		}
+		if (psa_hash_setup(&h, PSA_ALG_SHA_256) != PSA_SUCCESS ||
+		    psa_hash_update(&h, pad, sizeof(pad)) != PSA_SUCCESS ||
+		    psa_hash_update(&h, outer ? out : msg, outer ? 32u : len) != PSA_SUCCESS ||
+		    psa_hash_finish(&h, out, 32, &n) != PSA_SUCCESS) {
+			(void)psa_hash_abort(&h);
+			memset(out, 0, 32);
+			return;
+		}
 	}
 }
 

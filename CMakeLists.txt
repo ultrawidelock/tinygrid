@@ -18,6 +18,11 @@ if(CONFIG_TINYGRID)
   zephyr_library_sources_ifdef(CONFIG_TINYGRID_RADIO_OWN ports/zephyr/tg_radio_nrf52.c src/tg_phy.c)
   zephyr_library_sources_ifdef(CONFIG_TINYGRID_DNS src/tg_dns.c)
   zephyr_library_sources_ifdef(CONFIG_TINYGRID_MATTER ports/zephyr/matter_thread_tinygrid.c)
+  # On nRF52 the ECB peripheral does the AES blocks, through MPSL.
+  if(CONFIG_MPSL AND CONFIG_SOC_SERIES_NRF52)
+    zephyr_library_sources(ports/zephyr/tg_aes_mpsl.c)
+    zephyr_library_compile_definitions(TG_PSA_AES=0)
+  endif()
   # Each optional part is compiled out, not just left unused.
   zephyr_library_compile_definitions(
     TG_DNS=$<BOOL:${CONFIG_TINYGRID_DNS}>
