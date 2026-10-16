@@ -427,6 +427,34 @@ static void test_srp_removal(void)
 	}
 }
 
+/* matter_thread_clear() resets SRP, then detaches at once. */
+static void test_srp_reset_clear(void)
+{
+	struct tg_srp_svc op = {.instance = "op", .type = "_matter._tcp", .subtypes = s_sub,
+				.nsub = 1, .port = 5540, .txt = s_txt, .txt_len = sizeof(s_txt)};
+	struct upd u;
+
+	srp_attached();
+	CHECK(tg_srp_host("host") == TG_OK);
+	CHECK(tg_srp_add(&op) == TG_OK);
+	(void)srp_step(true);
+	tg_srp_reset(true);
+	u = srp_step(false); /* sent, not yet answered */
+	CHECK(u.ptr_del == 2);
+	tg_clear();
+	CHECK(tg_srp_pending() && (tg.armed & (1u << T_SRP)));
+	CHECK(srp_step(false).id == 0u); /* no parent: nothing goes */
+	/* Attached again: the network data names the server and kicks SRP. */
+	tg.role = TG_CHILD;
+	tg.ds_len = 1;
+	tg.have_srp = true;
+	tg_srp_kick(0);
+	u = srp_step(true);
+	CHECK(u.ptr_del == 2 && op.state == TG_SRP_IDLE);
+	u = srp_step(true);
+	CHECK(u.id != 0u && u.lease == 0u && !tg_srp_pending());
+}
+
 int main(void)
 {
 	if (psa_crypto_init() != PSA_SUCCESS) {
@@ -438,6 +466,7 @@ int main(void)
 	test_phy();
 	test_srp_leases();
 	test_srp_removal();
+	test_srp_reset_clear();
 	printf("%d/%d checks passed\n", checks - fails, checks);
 	return fails ? 1 : 0;
 }

@@ -359,7 +359,8 @@ void tg_srp_timer(void)
 
 	/* A removal needs a parent and a server, not the off-mesh address. */
 	if (host == NULL || tg.role != TG_CHILD || !tg.have_srp || (!drop_host && !tg_ready())) {
-		return; /* kicked again once there is somewhere to register */
+		waiting = false; /* nothing in flight is answered now */
+		return;          /* kicked again once there is somewhere to register */
 	}
 	for (struct tg_srp_svc *s = svcs; s; s = s->next) {
 		work |= s->state == TG_SRP_ADD || s->state == TG_SRP_DEL;

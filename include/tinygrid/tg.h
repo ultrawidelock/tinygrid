@@ -45,7 +45,8 @@ int tg_init(uint32_t poll_ms);
  */
 int tg_start(const uint8_t *dataset, size_t len);
 
-/** Detach and drop the dataset. */
+/** Detach and drop the dataset. An SRP removal not yet answered is kept,
+ * and sent once attached again. */
 void tg_clear(void);
 
 enum tg_role tg_role(void);

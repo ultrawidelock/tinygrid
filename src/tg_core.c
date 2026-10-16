@@ -218,7 +218,9 @@ void tg_clear(void)
 {
 	tg.role = TG_DISABLED;
 	tg.ds_len = 0;
-	tg.armed = 0;
+	/* A removal outlives the detach: the SRP timer stays armed, finds no
+	 * parent, and the removal goes once there is one again. */
+	tg.armed = tg_srp_pending() ? (uint8_t)(tg.armed & (1u << T_SRP)) : 0u;
 	tg.have_omr = tg.have_srp = tg.omr_reg = false;
 	tg_mac_reset();
 	tg_plat_radio_rx(false);
