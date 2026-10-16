@@ -24,6 +24,9 @@ config TINYGRID_RADIO_OWN
 	depends on SOC_SERIES_NRF52
 	select EXPERIMENTAL
 	select NRFX_GPPI
+	# Not "depends on MPSL": MPSL selects a Nordic driver option, so that
+	# closes a dependency loop through this choice.
+	select MPSL
 	help
 	  Drives the RADIO directly in timeslots MPSL grants, Bluetooth
 	  first, instead of linking Nordic's driver. Needs MPSL (any
@@ -88,5 +91,17 @@ config TINYGRID_MATTER
 	bool "matter_thread.h on tinygrid, for tinytalk or ultrawidelock"
 	default y
 	depends on (TINYTALK && !TINYTALK_THREAD) || ULTRAWIDELOCK_MATTER
+	select TINYTALK_HAS_THREAD if TINYTALK
+
+config TINYGRID_MATTER_COMM_LEASE_S
+	int "SRP lease (s) of the commissionable record"
+	default 120
+	depends on TINYGRID_MATTER
+	help
+	  The _matterc._udp record's lease, shorter than the operational
+	  records' CONFIG_TINYGRID_SRP_LEASE_S: a node that loses power with
+	  a window open leaves a record Apple Home dials over Thread instead
+	  of using BLE. As tinytalk's SRP_COMM_LEASE_S
+	  (ports/zephyr/thread/matter_thread_port.c).
 
 endif

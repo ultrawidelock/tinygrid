@@ -37,6 +37,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#if !defined(CONFIG_ULTRAWIDELOCK_MATTER)
+BUILD_ASSERT(MATTER_THREAD_API == 1, "matter_thread.h changed: review this adapter");
+#endif
+
 static K_SEM_DEFINE(s_changed, 0, 1);
 
 /* ---- attach ------------------------------------------------------------ */
@@ -250,6 +254,7 @@ static void comm_register(uint16_t disc, uint16_t port)
 		.port = port,
 		.txt = s_comm.txt,
 		.txt_len = n,
+		.lease_s = CONFIG_TINYGRID_MATTER_COMM_LEASE_S,
 	};
 	(void)tg_srp_add(&s_comm.svc);
 }
@@ -456,6 +461,16 @@ void matter_thread_advertise_reset(void)
 	s_comm.stale = s_comm.svc.state != TG_SRP_IDLE; /* tg/3 goes once it is removed */
 	tg_srp_reset(true); /* each service stays tinygrid's until it is removed */
 	tg_zephyr_unlock();
+}
+
+bool matter_thread_advertise_pending(void)
+{
+	bool pending;
+
+	tg_zephyr_lock();
+	pending = tg_srp_pending();
+	tg_zephyr_unlock();
+	return pending;
 }
 
 #if defined(CONFIG_ULTRAWIDELOCK_MATTER)
