@@ -25,7 +25,8 @@ include/tinygrid/   tg.h (the API), tg_plat.h (what a port provides) and
                     tg_phy.h (radio logic for a port without a vendor driver)
 src/                the stack, portable C11: MAC, 6LoWPAN, IPv6, MLE, SRP
 ports/psa/          AES, HMAC and the SRP key on PSA Crypto
-ports/zephyr/       the nRF 802.15.4 radio driver, settings, a thread;
+ports/zephyr/       the radio (Nordic's nRF 802.15.4 driver, or tinygrid's
+                    own on MPSL timeslots), settings, a thread;
                     matter_thread.h for tinytalk; tinygrid.conf
 ports/host/         OpenThread's simulated radio, for tests
 tests/host/         unit tests
@@ -56,4 +57,6 @@ ninja -C build/ot-sim ot-cli-ftd
 
 In an application, add this repository as a Zephyr module and
 `ports/zephyr/tinygrid.conf` as an extra conf file. `CONFIG_TINYGRID_POLL_MS`
-picks a sleepy child.
+picks a sleepy child. `ports/zephyr/tinygrid-radio.conf` after it swaps
+Nordic's radio driver for tinygrid's own (nRF52, 24 to 26 KB less flash,
+not yet run on hardware).

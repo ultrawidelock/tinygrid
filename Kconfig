@@ -3,15 +3,34 @@
 menuconfig TINYGRID
 	bool "tinygrid: a Thread child that never routes"
 	depends on HAS_HW_NRF_RADIO_IEEE802154 && !OPENTHREAD
-	select NRF_802154_RADIO_DRIVER
 	select SETTINGS
 	help
-	  A Thread end device on the nRF 802.15.4 radio driver: attach as a
-	  child, keep the link, configure addresses from the network data,
-	  carry UDP and register services over SRP. No OpenThread, no
-	  network stack.
+	  A Thread end device on the nRF 802.15.4 radio: attach as a child,
+	  keep the link, configure addresses from the network data, carry UDP
+	  and register services over SRP. No OpenThread, no network stack.
 
 if TINYGRID
+
+choice TINYGRID_RADIO
+	prompt "Radio driver"
+	default TINYGRID_RADIO_NRF_802154
+
+config TINYGRID_RADIO_NRF_802154
+	bool "Nordic's nRF 802.15.4 driver"
+	select NRF_802154_RADIO_DRIVER
+
+config TINYGRID_RADIO_OWN
+	bool "tinygrid's own, on MPSL timeslots [EXPERIMENTAL]"
+	depends on SOC_SERIES_NRF52
+	select EXPERIMENTAL
+	select NRFX_GPPI
+	help
+	  Drives the RADIO directly in timeslots MPSL grants, Bluetooth
+	  first, instead of linking Nordic's driver. Needs MPSL (any
+	  Bluetooth build has it) and one timeslot session:
+	  CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1. Not yet run on hardware.
+
+endchoice
 
 config TINYGRID_POLL_MS
 	int "Sleepy poll period (ms); 0 for a receiver that is always on"
