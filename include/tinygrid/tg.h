@@ -146,14 +146,23 @@ int tg_srp_host(const char *label);
 /** Register @p svc, alongside every other service, on the next update. */
 int tg_srp_add(struct tg_srp_svc *svc);
 
-/** Withdraw @p svc on the next update. */
+/** Withdraw @p svc on the next update: by name, with its subtypes. */
 int tg_srp_remove(struct tg_srp_svc *svc);
 
 /**
- * Drop every service. With @p tell_server the host and its key are removed
- * from the server too; without, they are forgotten locally only.
+ * Drop every service. With @p tell_server each one is removed from the server
+ * by name, subtypes included, and then the host and its key: a server may keep
+ * the services of a host it removes, as Apple's border router does. The
+ * services stay tinygrid's until each is reported TG_SRP_IDLE, and
+ * tg_plat_changed() reports every answer. The removal waits for a parent and
+ * a server, not for the off-mesh address: the server knows this host by its
+ * key, from this boot or an earlier one. Without @p tell_server everything is
+ * forgotten locally, at once.
  */
 void tg_srp_reset(bool tell_server);
+
+/** A removal, of a service or of the host, the server has not yet answered. */
+bool tg_srp_pending(void);
 
 #ifdef __cplusplus
 }

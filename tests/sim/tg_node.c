@@ -9,7 +9,7 @@
  *   srp host <label>
  *   srp add <instance> <type> <port> [subtype|-] [lease s]
  *   srp del <instance>
- *   srp reset                   remove host and services from the server
+ *   srp reset                   remove each service by name, then the host
  *   mcast <port> <text>         send to ff03::1 from port 5540
  *   resolve <instance> <type>   DNS-SD: SRV, then AAAA
  *   clear                       tg_clear()
@@ -102,6 +102,7 @@ static void srp_states(void)
 			printf("ev srp svc %s state %u\n", svc[i].instance, svc[i].state);
 		}
 	}
+	printf("ev srp pending %d\n", tg_srp_pending());
 	fflush(stdout);
 }
 

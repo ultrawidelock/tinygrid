@@ -17,6 +17,9 @@
 #define TG_SRP_KEY_LEASE_S TG_SRP_LEASE_S /* a key lease may not be shorter */
 #endif
 
+/* The most one datagram carries (tg_udp_send). */
+#define SRP_MAX (TG_PKT_MAX - 48u)
+
 #define RT_SOA 6u
 #define RT_PTR 12u
 #define RT_TXT 16u
@@ -81,6 +84,12 @@ static uint32_t lease_of(const struct tg_srp_svc *s)
 	return s->lease_s ? s->lease_s : TG_SRP_LEASE_S;
 }
 
+/* What an update carries: while the host is going, only removals. */
+static bool carried(const struct tg_srp_svc *s)
+{
+	return s->state != TG_SRP_IDLE && (!drop_host || s->state == TG_SRP_DEL);
+}
+
 /* The next update of this round: the shortest lease above the last one
  * answered, 0 when every lease has had its update. */
 static uint32_t next_group(void)
@@ -90,7 +99,7 @@ static uint32_t next_group(void)
 	for (struct tg_srp_svc *s = svcs; s; s = s->next) {
 		uint32_t l = lease_of(s);
 
-		if (s->state != TG_SRP_IDLE && l > round_lease && (best == 0u || l < best)) {
+		if (carried(s) && l > round_lease && (best == 0u || l < best)) {
 			best = l;
 		}
 	}
@@ -142,26 +151,60 @@ int tg_srp_remove(struct tg_srp_svc *svc)
 
 void tg_srp_reset(bool tell_server)
 {
+	if (tell_server && host != NULL) {
+		/* Apple's border router keeps the services of a host it removes
+		 * (2026-10-16), so each goes by name first, then the host and its
+		 * key. The server may know this host from an earlier boot, so this
+		 * does not ask whether it registered in this one. */
+		for (struct tg_srp_svc *s = svcs; s; s = s->next) {
+			if (s->state != TG_SRP_IDLE) {
+				s->state = TG_SRP_DEL;
+			}
+		}
+		drop_host = true;
+		tg_srp_kick(0);
+		return;
+	}
 	for (struct tg_srp_svc *s = svcs; s; s = s->next) {
 		s->state = TG_SRP_IDLE;
 	}
 	svcs = NULL;
 	round_lease = 0;
-	drop_host = tell_server && registered;
-	if (drop_host) {
-		tg_srp_kick(0);
-	} else {
-		registered = false;
-		tg_disarm(T_SRP);
+	drop_host = waiting = registered = false;
+	tg_disarm(T_SRP);
+}
+
+bool tg_srp_pending(void)
+{
+	bool pending = drop_host;
+
+	for (struct tg_srp_svc *s = svcs; s; s = s->next) {
+		pending |= s->state == TG_SRP_DEL;
 	}
+	return pending;
+}
+
+/* The most a service's records take, compression aside: the PTRs (type,
+ * then one per subtype), the instance's wipe, SRV and TXT. */
+static size_t svc_room(const struct tg_srp_svc *s, size_t hl)
+{
+	size_t n = strlen(s->type) + strlen(s->instance) + 28u;
+
+	for (uint8_t i = 0; i < s->nsub; i++) {
+		n += strlen(s->subtypes[i]) + 20u;
+	}
+	return s->state == TG_SRP_DEL ? n : n + hl + 34u + s->txt_len;
 }
 
 static uint16_t build(void)
 {
-	uint8_t *b = tg.pkt, *p = b + 12, *v;
+	uint8_t *b = tg.pkt, *p = b + 12, *v, *end = b + SRP_MAX;
 	uint16_t zone, hoff = 0, nup = 0, sig;
 	uint32_t ttl = cur ? cur : TG_SRP_LEASE_S, klease = TG_SRP_KEY_LEASE_S;
 	uint8_t addr[16], key[64], *rd;
+	/* What every update ends with: the host's name, AAAA and KEY (hl + 121
+	 * at most), the OPT (23) and SIG(0) (hl + 95 at most). */
+	size_t hl = strlen(host), tail = 2u * hl + 239u;
 
 	/* One key lease in every update, the longest of them all: a key lease
 	 * may not be shorter than a lease. */
@@ -194,11 +237,15 @@ static uint16_t build(void)
 		uint16_t soff, ioff, suboff = 0;
 
 		/* The services of this update's lease, and no others. */
-		s->sent = cur && lease_of(s) == cur ? s->state : TG_SRP_IDLE;
+		s->sent = cur && carried(s) && lease_of(s) == cur ? s->state : TG_SRP_IDLE;
 		if (s->sent == TG_SRP_IDLE) {
 			continue;
 		}
-		/* Service Discovery: PTR type -> instance */
+		if ((size_t)(end - p) < svc_room(s, hl) + tail) {
+			return 0; /* more than one datagram holds */
+		}
+		/* Service Discovery: PTR type -> instance, and each subtype's; a
+		 * removal deletes them all by name. */
 		soff = (uint16_t)(p - b);
 		p = ptr(labels(p, s->type), zone);
 		v = rr(p, RT_PTR, del ? CL_NONE : CL_IN, del ? 0u : ttl, 0);
@@ -206,7 +253,7 @@ static uint16_t build(void)
 		p = ptr(labels(v, s->instance), soff);
 		rdlen(v, p);
 		nup++;
-		for (uint8_t i = 0; !del && i < s->nsub; i++) {
+		for (uint8_t i = 0; i < s->nsub; i++) {
 			p = labels(p, s->subtypes[i]);
 			if (i == 0u) {
 				suboff = (uint16_t)(p - b);
@@ -214,7 +261,7 @@ static uint16_t build(void)
 			} else {
 				p = ptr(p, suboff);
 			}
-			v = rr(p, RT_PTR, CL_IN, ttl, 2);
+			v = rr(p, RT_PTR, del ? CL_NONE : CL_IN, del ? 0u : ttl, 2);
 			p = ptr(v, ioff);
 			nup++;
 		}
@@ -248,6 +295,9 @@ static uint16_t build(void)
 	}
 
 	/* Host Description: wipe the name, then its address and key */
+	if ((size_t)(end - p) < tail) {
+		return 0;
+	}
 	if (hoff) {
 		p = ptr(p, hoff);
 	} else {
@@ -307,7 +357,8 @@ void tg_srp_timer(void)
 	bool work = drop_host;
 	uint16_t n;
 
-	if (host == NULL || !tg_ready() || !tg.have_srp) {
+	/* A removal needs a parent and a server, not the off-mesh address. */
+	if (host == NULL || tg.role != TG_CHILD || !tg.have_srp || (!drop_host && !tg_ready())) {
 		return; /* kicked again once there is somewhere to register */
 	}
 	for (struct tg_srp_svc *s = svcs; s; s = s->next) {
@@ -317,8 +368,13 @@ void tg_srp_timer(void)
 		return;
 	}
 	if (!waiting) {
-		/* A retry or a timeout sends the same lease again. */
-		cur = drop_host ? 0u : next_group();
+		/* A retry or a timeout sends the same lease again. With the host
+		 * going, removals first, then the host itself (lease 0). */
+		cur = next_group();
+		if (cur == 0u && round_lease != 0u) {
+			round_lease = 0; /* a round cut short: from the shortest again */
+			cur = next_group();
+		}
 		if (cur == 0u && !drop_host) {
 			cur = TG_SRP_LEASE_S; /* no service: the host alone */
 		}
@@ -392,6 +448,7 @@ void tg_srp_rx(const uint8_t *m, uint16_t n)
 	if (cur == 0u) {
 		drop_host = false;
 		registered = false;
+		round_lease = 0;
 		if (svcs) {
 			tg_arm(T_SRP, 0); /* services added while the host was going */
 		}
@@ -406,7 +463,7 @@ void tg_srp_rx(const uint8_t *m, uint16_t n)
 		s->sent = TG_SRP_IDLE;
 		if (sent == TG_SRP_IDLE) {
 			/* another lease's, or added while this was in flight */
-			more |= s->state != TG_SRP_REG && lease_of(s) <= cur;
+			more |= carried(s) && s->state != TG_SRP_REG && lease_of(s) <= cur;
 		} else if (s->state != sent && s->state != TG_SRP_REG) {
 			more = true; /* changed while this was in flight */
 		} else if (s->state == TG_SRP_DEL) {
@@ -428,7 +485,7 @@ void tg_srp_rx(const uint8_t *m, uint16_t n)
 		/* Round done: again at once if something changed under an update
 		 * already answered, else renew at 80% of the shortest lease. */
 		round_lease = 0;
-		tg_arm(T_SRP, more ? 0u : round_min * 800u);
+		tg_arm(T_SRP, more || drop_host ? 0u : round_min * 800u);
 	}
 	tg_plat_changed();
 }

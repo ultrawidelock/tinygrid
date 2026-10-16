@@ -337,6 +337,96 @@ static void test_srp_leases(void)
 	tg_srp_reset(false);
 }
 
+static void test_srp_removal(void)
+{
+	struct tg_srp_svc op = {.instance = "op", .type = "_matter._tcp", .subtypes = s_sub,
+				.nsub = 1, .port = 5540, .txt = s_txt, .txt_len = sizeof(s_txt)};
+	struct tg_srp_svc comm = {.instance = "comm", .type = "_matterc._udp", .port = 5540,
+				  .txt = s_txt, .txt_len = sizeof(s_txt), .lease_s = 120};
+	struct upd u;
+
+	srp_attached();
+	CHECK(tg_srp_host("host") == TG_OK);
+	CHECK(tg_srp_add(&op) == TG_OK);
+	(void)srp_step(true);
+	CHECK(op.state == TG_SRP_REG && !tg_srp_pending());
+	/* A removal deletes the subtype's PTR along with the instance's. */
+	CHECK(tg_srp_remove(&op) == TG_OK && tg_srp_pending());
+	u = srp_step(true);
+	CHECK(u.ptr_del == 2 && u.ptr_add == 0 && u.wipe == 2 && u.srv == 0); /* instance, host */
+	CHECK(op.state == TG_SRP_IDLE && !tg_srp_pending());
+
+	/* Reset: every service by name, one update per lease, then the host. */
+	CHECK(tg_srp_add(&op) == TG_OK && tg_srp_add(&comm) == TG_OK);
+	(void)srp_step(true);
+	(void)srp_step(true);
+	CHECK(op.state == TG_SRP_REG && comm.state == TG_SRP_REG);
+	tg_srp_reset(true);
+	CHECK(tg_srp_pending() && op.state == TG_SRP_DEL && comm.state == TG_SRP_DEL);
+	u = srp_step(true);
+	CHECK(u.lease == 120u && u.ptr_del == 1 && u.srv == 0);
+	u = srp_step(true);
+	CHECK(u.lease == 7200u && u.ptr_del == 2 && u.srv == 0);
+	CHECK(op.state == TG_SRP_IDLE && comm.state == TG_SRP_IDLE && tg_srp_pending());
+	u = srp_step(true);
+	CHECK(u.id != 0u && u.lease == 0u && u.klease == 0u && u.ptr_del == 0);
+	CHECK(!tg_srp_pending());
+
+	/* After a reboot nothing is registered in RAM, and the off-mesh address
+	 * may not be back: the removal still goes, the server knows the key. */
+	srp_attached();
+	tg.omr_reg = false;
+	CHECK(tg_srp_host("host") == TG_OK);
+	tg_srp_reset(true);
+	u = srp_step(true);
+	CHECK(u.id != 0u && u.lease == 0u && !tg_srp_pending());
+
+	/* An update that cannot fit one datagram is not built. */
+	{
+		static char big[3][64];
+		static uint8_t txt[400];
+		static struct tg_srp_svc many[3];
+
+		srp_attached();
+		CHECK(tg_srp_host("host") == TG_OK);
+		for (int i = 0; i < 3; i++) {
+			memset(big[i], 'a' + i, 63);
+			many[i] = (struct tg_srp_svc){.instance = big[i], .type = "_matter._tcp",
+						      .port = 5540, .txt = txt, .txt_len = sizeof(txt)};
+			CHECK(tg_srp_add(&many[i]) == TG_OK);
+		}
+		(void)srp_step(true); /* the answer finds nothing in flight */
+		CHECK(many[0].state == TG_SRP_ADD && tg.due[T_SRP] - tg_plat_now() > 900u);
+		tg_srp_reset(false);
+	}
+	/* What a lock with three fabrics and a window open asks for fits in one,
+	 * even on a single lease: three 33-character operational names with
+	 * their _I subtypes, and the commissionable record's 64 B of TXT. */
+	{
+		static char name[3][34];
+		static uint8_t ctxt[64];
+		static const char *const csub[] = {"_S15", "_L4095"};
+		static struct tg_srp_svc ops[3], c;
+
+		srp_attached();
+		CHECK(tg_srp_host("0123456789ABCDEF") == TG_OK);
+		for (int i = 0; i < 3; i++) {
+			memset(name[i], 'A' + i, 33);
+			ops[i] = (struct tg_srp_svc){.instance = name[i], .type = "_matter._tcp",
+						     .subtypes = s_sub, .nsub = 1, .port = 5540,
+						     .txt = s_txt, .txt_len = sizeof(s_txt)};
+			CHECK(tg_srp_add(&ops[i]) == TG_OK);
+		}
+		c = (struct tg_srp_svc){.instance = "0123456789ABCDEF", .type = "_matterc._udp",
+					.subtypes = csub, .nsub = 2, .port = 5540, .txt = ctxt,
+					.txt_len = sizeof(ctxt)};
+		CHECK(tg_srp_add(&c) == TG_OK);
+		u = srp_step(true);
+		CHECK(u.srv == 4 && c.state == TG_SRP_REG && ops[2].state == TG_SRP_REG);
+		tg_srp_reset(false);
+	}
+}
+
 int main(void)
 {
 	if (psa_crypto_init() != PSA_SUCCESS) {
@@ -347,6 +437,7 @@ int main(void)
 	test_ccm_vs_psa();
 	test_phy();
 	test_srp_leases();
+	test_srp_removal();
 	printf("%d/%d checks passed\n", checks - fails, checks);
 	return fails ? 1 : 0;
 }

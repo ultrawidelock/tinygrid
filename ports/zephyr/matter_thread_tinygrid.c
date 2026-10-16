@@ -387,9 +387,11 @@ int matter_thread_unadvertise_commissionable(void)
 void matter_thread_advertise_reset(void)
 {
 	tg_zephyr_lock();
-	tg_srp_reset(true); /* unlinks every service before they are wiped */
-	memset(s_ops, 0, sizeof(s_ops));
-	memset(&s_comm, 0, sizeof(s_comm));
+	for (size_t i = 0; i < MATTER_SUPPORTED_FABRICS; i++) {
+		s_ops[i].want[0] = '\0';
+	}
+	s_comm.want = false;
+	tg_srp_reset(true); /* each service stays tinygrid's until it is removed */
 	tg_zephyr_unlock();
 }
 

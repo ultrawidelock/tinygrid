@@ -253,6 +253,23 @@ def main():
 
         check('DNS-SD resolves a registered instance, and not a missing one', resolve)
 
+        def srp_reset():
+            tg.drain()
+            tg.send('srp reset')
+            tg.expect(r'^ev srp pending 0', 20)
+            assert services() == {}, services()
+            ot.drain()
+            n0 = len(ot.log)
+            ot.send('srp server host')
+            ot.expect(r'^Done', 5)
+            assert not any('tgnode' in l for l in ot.log[n0:]), ot.log[n0:]
+            # and the host registers afresh
+            tg.send('srp add inst5 _matter._tcp 5540 _IFEDCBA9876543210')
+            tg.expect(r'^ev srp svc inst5 state 2', 20)
+            assert services()['inst5._matter._tcp'].get('deleted') == 'false'
+
+        check('SRP reset removes every service by name, then the host', srp_reset)
+
         def mcast_rx():
             ot.cmd('udp open')
             ot.cmd('udp bind :: 1234')
@@ -302,8 +319,6 @@ def main():
             # Every service renews at 80% of the shortest lease. Once the node
             # stops, the 120 s record lapses on its own and the host, left on
             # the longest lease by the last update of each round, stays.
-            tg.send('srp del inst3')
-            tg.expect(r'^ev srp svc inst3 state 0', 20)
             tg.send('srp add inst3 _matterc._udp 5540 _L840 120')
             tg.expect(r'^ev srp svc inst3 state 2', 20)
             t0 = time.monotonic()
@@ -316,7 +331,7 @@ def main():
             t = time.monotonic() - t0
             print(f'     120 s record gone {t:.0f} s after its last update', flush=True)
             assert 110 <= t <= 135, f'{t:.0f} s'
-            assert services()['inst2._matterc._udp'].get('deleted') == 'false'
+            assert services()['inst5._matter._tcp'].get('deleted') == 'false'
             ot.drain()
             ot.send('srp server host')
             ot.expect(r'^tgnode\.default\.service\.arpa\.', 5)
