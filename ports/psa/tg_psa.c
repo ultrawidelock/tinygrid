@@ -7,6 +7,7 @@
  * The SRP key is volatile and its private half is kept in tg_plat_save() under
  * TG_KV_SRP, so no persistent-key storage is needed from the crypto library.
  */
+#include <tinygrid/tg.h>
 #include <tinygrid/tg_plat.h>
 
 #include <psa/crypto.h>
@@ -117,6 +118,15 @@ static int srp_key(void)
 		srp_id = 0;
 	}
 	return rc;
+}
+
+void tg_srp_key_reset(void)
+{
+	if (srp_id) {
+		(void)psa_destroy_key(srp_id);
+		srp_id = 0;
+	}
+	(void)tg_plat_save(TG_KV_SRP, NULL, 0);
 }
 
 int tg_plat_srp_pub(uint8_t pub[64])

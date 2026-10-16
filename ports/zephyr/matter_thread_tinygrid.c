@@ -123,7 +123,9 @@ struct reply_to {
 void matter_thread_peer_current(struct matter_thread_peer *out)
 {
 	if (out != NULL) {
+		tg_zephyr_lock(); /* udp_rx() writes it under the lock */
 		*out = s_cur_peer;
+		tg_zephyr_unlock();
 	}
 }
 
@@ -167,9 +169,11 @@ int matter_thread_send_to(const struct matter_thread_peer *peer, const uint8_t *
 
 /* ---- SRP --------------------------------------------------------------- */
 
-/* "<16 hex of the ML-EID IID>": random, stable while tinygrid's state is,
- * and erased together with the SRP key, so a new key never asks for a name
- * the server still holds under the old one. */
+/* "<16 hex of the ML-EID IID>": random, and stable while tinygrid's state
+ * (tg/1) is. advertise_reset keeps it, since the host's removal goes out
+ * under it. A factory reset that wipes the settings store draws a new IID and
+ * a new SRP key together, so a new key never asks for a name the server still
+ * holds under the old one. */
 static char s_host[17];
 
 /* One TXT string: length, then key=value. */
@@ -380,9 +384,13 @@ int matter_thread_unadvertise_commissionable(void)
 }
 
 /*
- * Retract every name, and the host's key with them: the instance names are
- * derived from fabrics that just ceased to exist and will never be asked for
- * again, so nothing on the border router should keep vouching for them.
+ * Retract every name, then the host: the instance names are derived from
+ * fabrics that just ceased to exist and will never be asked for again, so
+ * nothing on the border router should keep vouching for them. The host goes
+ * with a key lease of 0, so the server forgets its key; the key itself stays
+ * in tg/2. The door-lock wipes the settings store on a factory reset
+ * (tinytalk b37d675), which takes it; an application that does not calls
+ * tg_srp_key_reset() once this is answered.
  */
 void matter_thread_advertise_reset(void)
 {

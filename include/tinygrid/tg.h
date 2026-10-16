@@ -165,6 +165,15 @@ void tg_srp_reset(bool tell_server);
 /** A removal, of a service or of the host, the server has not yet answered. */
 bool tg_srp_pending(void);
 
+/**
+ * Forget the SRP key (ports/psa: tg/2 and the key in memory); the next update
+ * registers under a new one. Call once tg_srp_reset(true) is answered: a
+ * server keeps a name bound to its key until the key lease runs out. An
+ * application that wipes the settings store on a factory reset, as the
+ * door-lock does (tinytalk b37d675), loses the key with it and need not.
+ */
+void tg_srp_key_reset(void);
+
 #ifdef __cplusplus
 }
 #endif

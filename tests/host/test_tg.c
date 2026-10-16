@@ -455,6 +455,15 @@ static void test_srp_reset_clear(void)
 	CHECK(u.id != 0u && u.lease == 0u && !tg_srp_pending());
 }
 
+static void test_srp_key_reset(void)
+{
+	uint8_t a[64], b[64];
+
+	CHECK(tg_plat_srp_pub(a) == 0 && tg_plat_srp_pub(b) == 0 && memcmp(a, b, 64) == 0);
+	tg_srp_key_reset();
+	CHECK(tg_plat_srp_pub(b) == 0 && memcmp(a, b, 64) != 0);
+}
+
 int main(void)
 {
 	if (psa_crypto_init() != PSA_SUCCESS) {
@@ -467,6 +476,7 @@ int main(void)
 	test_srp_leases();
 	test_srp_removal();
 	test_srp_reset_clear();
+	test_srp_key_reset();
 	printf("%d/%d checks passed\n", checks - fails, checks);
 	return fails ? 1 : 0;
 }

@@ -85,6 +85,10 @@ int tg_plat_save(uint8_t key, const void *buf, size_t len)
 	FILE *f;
 
 	kv_path(p, sizeof(p), key);
+	if (len == 0u) {
+		(void)remove(p);
+		return 0;
+	}
 	f = fopen(p, "wb");
 	if (f == NULL) {
 		return -1;
