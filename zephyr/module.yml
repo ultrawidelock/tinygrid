@@ -1,0 +1,4 @@
+name: tinygrid
+build:
+  cmake: .
+  kconfig: Kconfig

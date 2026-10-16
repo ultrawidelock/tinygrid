@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: ISC
+
+menuconfig TINYGRID
+	bool "tinygrid: a Thread child that never routes"
+	depends on HAS_HW_NRF_RADIO_IEEE802154 && !OPENTHREAD
+	select NRF_802154_RADIO_DRIVER
+	select SETTINGS
+	help
+	  A Thread end device on the nRF 802.15.4 radio driver: attach as a
+	  child, keep the link, configure addresses from the network data,
+	  carry UDP and register services over SRP. No OpenThread, no
+	  network stack.
+
+if TINYGRID
+
+config TINYGRID_POLL_MS
+	int "Sleepy poll period (ms); 0 for a receiver that is always on"
+	default 0
+	help
+	  0 attaches as a minimal end device (MED) whose receiver never
+	  sleeps. Anything else attaches as a sleepy end device (SED) that
+	  polls its parent this often.
+
+config TINYGRID_CHILD_TIMEOUT
+	int "Child timeout (s)"
+	default 240
+	help
+	  How long the parent keeps this child without hearing from it. The
+	  child sends a keep-alive 4 s before it runs out.
+
+config TINYGRID_TX_POWER
+	int "Transmit power (dBm)"
+	default 0
+
+config TINYGRID_STACK_SIZE
+	int "Stack of the tinygrid thread"
+	default 4096
+	help
+	  Matter's datagram handler runs on it.
+
+config TINYGRID_THREAD_PRIORITY
+	int "Priority of the tinygrid thread"
+	default 8
+
+config TINYGRID_MATTER
+	bool "tinytalk's matter_thread.h on tinygrid"
+	default y if TINYTALK
+	depends on TINYTALK && !TINYTALK_THREAD
+
+endif
