@@ -87,10 +87,11 @@ static uint32_t sum(uint32_t s, const uint8_t *p, size_t n)
 	return s;
 }
 
-static uint16_t csum(const uint8_t *ip6, const uint8_t *l4, const uint8_t *d, uint16_t dlen)
+static uint16_t csum(const uint8_t *ip6, uint8_t nh, const uint8_t *l4, const uint8_t *d,
+		     uint16_t dlen)
 {
 	uint16_t len = (uint16_t)(8u + dlen);
-	uint8_t ph[4] = {(uint8_t)(len >> 8), (uint8_t)len, 0, ip6[6]};
+	uint8_t ph[4] = {(uint8_t)(len >> 8), (uint8_t)len, 0, nh};
 	uint32_t s = sum(sum(sum(sum(0, ip6 + 8, 32), ph, 4), l4, 8), d, dlen);
 
 	while (s >> 16) {
@@ -99,29 +100,60 @@ static uint16_t csum(const uint8_t *ip6, const uint8_t *l4, const uint8_t *d, ui
 	return (uint16_t)s;
 }
 
-/* Send one datagram whose transport header (UDP or ICMPv6) is l4[8]. */
-static int send(uint8_t ip6[48], const uint8_t *d, uint16_t dlen, bool mle)
+static bool realm_mcast(const uint8_t *a)
+{
+	return a[0] == 0xffu && (a[1] & 0x0fu) == 3u;
+}
+
+/* MPL messages already seen, by seed and sequence: a router may repeat one. */
+static struct {
+	uint16_t seed;
+	uint8_t seq;
+} seen[4];
+static uint8_t seen_next;
+
+static bool mpl_seen(uint16_t seed, uint8_t seq)
+{
+	for (uint8_t i = 0; i < 4u; i++) {
+		if (seen[i].seed == seed && seen[i].seq == seq) {
+			return true;
+		}
+	}
+	seen[seen_next].seed = seed;
+	seen[seen_next].seq = seq;
+	seen_next = (uint8_t)((seen_next + 1u) & 3u);
+	return false;
+}
+
+/*
+ * Send one datagram. ip6 holds the 40-byte header, then (for realm-local
+ * multicast) an 8-byte hop-by-hop header with the MPL option, then the
+ * 8-byte transport header (UDP or ICMPv6).
+ */
+static int send(uint8_t *ip6, const uint8_t *d, uint16_t dlen, bool mle)
 {
 	const uint8_t *src = ip6 + 8, *dst = ip6 + 24;
+	uint8_t ext = ip6[6] == 0u ? 8u : 0u;
+	uint8_t *l4 = ip6 + 40 + ext, nh = ext ? ip6[40] : ip6[6];
 	struct tg_maddr ms = {0}, md = {0};
-	uint8_t hdr[64], hl, cpos;
+	uint8_t hdr[72], hl, cpos;
 	uint16_t c;
 
-	if (dlen > TG_PKT_MAX - 48u) {
+	if (dlen > TG_PKT_MAX - 48u - ext) {
 		return TG_E_INVAL;
 	}
 	if (!mle && tg.role != TG_CHILD) {
 		return TG_E_STATE;
 	}
 	ip6[0] = 0x60u;
-	put16(ip6 + 4, (uint16_t)(8u + dlen));
-	if (ip6[6] == 17u) {
-		put16(ip6 + 44, (uint16_t)(8u + dlen));
+	put16(ip6 + 4, (uint16_t)(ext + 8u + dlen));
+	if (nh == 17u) {
+		put16(l4 + 4, (uint16_t)(8u + dlen));
 	}
-	cpos = ip6[6] == 17u ? 46u : 42u;
-	put16(ip6 + cpos, 0);
-	c = (uint16_t)~csum(ip6, ip6 + 40, d, dlen);
-	put16(ip6 + cpos, c ? c : 0xffffu);
+	cpos = nh == 17u ? 6u : 2u;
+	put16(l4 + cpos, 0);
+	c = (uint16_t)~csum(ip6, nh, l4, d, dlen);
+	put16(l4 + cpos, c ? c : 0xffffu);
 
 	if (memcmp(src, ll_pre, 8) == 0) {
 		ms.mode = 3;
@@ -130,7 +162,7 @@ static int send(uint8_t ip6[48], const uint8_t *d, uint16_t dlen, bool mle)
 		ms.mode = 2;
 		ms.s = tg.rloc;
 	}
-	if (dst[0] == 0xffu) {
+	if (dst[0] == 0xffu && (mle || dst[1] == 0x02u)) {
 		md.mode = 2;
 		md.s = 0xffffu;
 	} else if (memcmp(dst, ll_pre, 8) == 0) {
@@ -138,36 +170,52 @@ static int send(uint8_t ip6[48], const uint8_t *d, uint16_t dlen, bool mle)
 		memcpy(md.e, dst + 8, 8);
 		md.e[0] ^= 0x02u;
 	} else {
-		md.mode = 2;
+		md.mode = 2; /* everything else, multicast too, goes to the parent */
 		md.s = tg.par.rloc;
 	}
 	hl = tg_iphc(hdr, ip6, &ms, &md);
-	if (ip6[6] != 17u) {
-		memcpy(hdr + hl, ip6 + 40, 8); /* ICMPv6 header, uncompressed */
+	if (nh != 17u) {
+		memcpy(hdr + hl, l4, 8); /* ICMPv6 header, uncompressed */
 		hl += 8;
 	}
-	return tg_mac_send(hdr, hl, d, dlen, (uint16_t)(48u + dlen), &md, ms.mode == 3u, !mle);
+	return tg_mac_send(hdr, hl, d, dlen, (uint16_t)(48u + ext + dlen), &md, ms.mode == 3u, !mle);
 }
 
 int tg_ip6_send_udp(const uint8_t src[16], const uint8_t dst[16], uint8_t hlim, uint16_t sport,
 		    uint16_t dport, const uint8_t *data, uint16_t len, bool mle)
 {
-	uint8_t ip6[48] = {0};
+	uint8_t ip6[56] = {0}, *u = ip6 + 40;
 
 	ip6[6] = 17;
 	ip6[7] = hlim;
 	memcpy(ip6 + 8, src, 16);
 	memcpy(ip6 + 24, dst, 16);
-	put16(ip6 + 40, sport);
-	put16(ip6 + 42, dport);
+	if (!mle && realm_mcast(dst)) {
+		/* MPL, as OpenThread seeds it from a non-RLOC source: S=1 and the
+		 * RLOC16 as the seed (ip6_mpl.cpp). Six option bytes, no padding. */
+		static uint8_t seq;
+
+		ip6[6] = 0;
+		ip6[40] = 17;
+		ip6[41] = 0;
+		ip6[42] = 0x6du;
+		ip6[43] = 4;
+		ip6[44] = 0x40u;
+		ip6[45] = seq;
+		put16(ip6 + 46, tg.rloc);
+		(void)mpl_seen(tg.rloc, seq++); /* the parent echoes it back */
+		u += 8;
+	}
+	put16(u, sport);
+	put16(u + 2, dport);
 	return send(ip6, data, len, mle);
 }
 
 static void pick_src(uint8_t out[16], const uint8_t dst[16])
 {
-	if (memcmp(dst, ll_pre, 8) == 0) {
+	if (memcmp(dst, ll_pre, 8) == 0 || (dst[0] == 0xffu && (dst[1] & 0x0fu) == 2u)) {
 		tg_lladdr(out, tg.ext);
-	} else if (memcmp(dst, tg.mlp, 8) != 0 && tg.have_omr) {
+	} else if (dst[0] != 0xffu && memcmp(dst, tg.mlp, 8) != 0 && tg.have_omr) {
 		memcpy(out, tg.omr, 8);
 		memcpy(out + 8, tg.iid, 8);
 	} else {
@@ -183,7 +231,7 @@ int tg_udp_send(const uint8_t *src, uint16_t sport, const uint8_t dst[16], uint1
 	if (len > 1232u) {
 		return TG_E_INVAL;
 	}
-	if (src == NULL) {
+	if (src == NULL || src[0] == 0xffu) { /* never a multicast source */
 		pick_src(s, dst);
 		src = s;
 	}
@@ -201,36 +249,58 @@ void tg_udp_bind(struct tg_udp *sock)
 	tg.socks = sock;
 }
 
+void tg_udp_unbind(struct tg_udp *sock)
+{
+	for (struct tg_udp **pp = &tg.socks; *pp; pp = &(*pp)->next) {
+		if (*pp == sock) {
+			*pp = sock->next;
+			return;
+		}
+	}
+}
+
 void tg_ip6_rx(uint8_t *pkt, uint16_t len, bool sec)
 {
-	uint8_t *src = pkt + 8, *dst = pkt + 24, *p = pkt + 40;
+	uint8_t *src = pkt + 8, *dst = pkt + 24, *p = pkt + 40, nh = pkt[6];
 	uint16_t n = (uint16_t)(len - 40u);
 
 	if (len < 48u || (pkt[0] >> 4) != 6u || !tg_is_ours(dst)) {
 		return;
 	}
-	{
-		uint8_t l4[8];
-		uint16_t c;
+	if (nh == 0u) { /* hop-by-hop: only MPL is understood, and only to drop repeats */
+		uint16_t ext = (uint16_t)((p[1] + 1u) * 8u);
 
-		memcpy(l4, p, 8);
-		if (pkt[6] == 17u) {
-			if (get16(p + 4) != n) {
-				return;
-			}
-		} else if (pkt[6] != 58u) {
+		if (ext + 8u > n || !sec) {
 			return;
 		}
-		c = csum(pkt, l4, p + 8, (uint16_t)(n - 8u));
-		if (c != 0xffffu) {
+		for (uint16_t i = 2; i + 4u <= ext && p[i] != 0u; i = (uint16_t)(i + 2u + p[i + 1])) {
+			if (p[i] == 0x6du && p[i + 1] >= 2u) {
+				uint8_t sl = p[i + 2] >> 6;
+				uint16_t seed = sl == 1u && p[i + 1] >= 4u ? get16(p + i + 4) : get16(src + 14);
+
+				if (tg_is_ours(src) || mpl_seen(seed, p[i + 3])) {
+					return;
+				}
+			}
+		}
+		nh = p[0];
+		p += ext;
+		n = (uint16_t)(n - ext);
+	}
+	{
+		uint8_t l4[8];
+
+		memcpy(l4, p, 8);
+		if ((nh == 17u && get16(p + 4) != n) || (nh != 17u && nh != 58u) ||
+		    csum(pkt, nh, l4, p + 8, (uint16_t)(n - 8u)) != 0xffffu) {
 			return;
 		}
 	}
-	if (pkt[6] == 17u) {
+	if (nh == 17u) {
 		uint16_t sport = get16(p), dport = get16(p + 2);
 
 		if (dport == TG_MLE_PORT) {
-			if (pkt[7] == 255u && memcmp(src, ll_pre, 8) == 0) {
+			if (pkt[7] == 255u && pkt[6] == 17u && memcmp(src, ll_pre, 8) == 0) {
 				tg_mle_rx(src, dst, p + 8, (uint16_t)(n - 8u));
 			}
 			return;
@@ -244,6 +314,12 @@ void tg_ip6_rx(uint8_t *pkt, uint16_t len, bool sec)
 			}
 			return;
 		}
+		if (dport == TG_DNS_CLIENT_PORT) {
+			if (sport == 53u) {
+				tg_dns_rx(p + 8, (uint16_t)(n - 8u));
+			}
+			return;
+		}
 		for (struct tg_udp *s = tg.socks; s; s = s->next) {
 			if (s->port == dport) {
 				s->rx(s, src, sport, dst, p + 8, (size_t)(n - 8u));
@@ -252,8 +328,8 @@ void tg_ip6_rx(uint8_t *pkt, uint16_t len, bool sec)
 		}
 		return;
 	}
-	if (sec && p[0] == 128u && p[1] == 0u) { /* echo request */
-		uint8_t ip6[48] = {0};
+	if (sec && p[0] == 128u && p[1] == 0u && pkt[6] == 58u) { /* echo request */
+		uint8_t ip6[56] = {0};
 
 		ip6[6] = 58;
 		ip6[7] = 64;

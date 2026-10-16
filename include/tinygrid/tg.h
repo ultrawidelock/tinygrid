@@ -84,13 +84,29 @@ struct tg_udp {
 
 /** Deliver datagrams for sock->port to sock->rx. @p sock must outlive it. */
 void tg_udp_bind(struct tg_udp *sock);
+void tg_udp_unbind(struct tg_udp *sock);
 
 /**
  * Send one datagram. @p src NULL picks the source the destination calls for.
- * The payload is copied before this returns.
+ * The payload is copied before this returns. A realm-local multicast
+ * destination (ff03::/16) goes out through the parent with an MPL option, and
+ * repeats of one arriving are dropped.
  */
 int tg_udp_send(const uint8_t *src, uint16_t sport, const uint8_t dst[16], uint16_t dport,
 		const uint8_t *data, size_t len);
+
+/* ---- DNS --------------------------------------------------------------- */
+
+/** err is TG_OK with addr and port, or negative with addr NULL. */
+typedef void (*tg_dns_fn)(void *ctx, int err, const uint8_t *addr, uint16_t port);
+
+/**
+ * Resolve "<instance>.<type>.default.service.arpa" to its SRV port and its
+ * host's address, asking the network's DNS server (the SRP server's address,
+ * port 53). One at a time: TG_E_BUSY while one is in flight. @p cb runs on
+ * the stack's context.
+ */
+int tg_dns_resolve(const char *instance, const char *type, tg_dns_fn cb, void *ctx);
 
 /* ---- SRP --------------------------------------------------------------- */
 

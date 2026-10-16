@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: ISC */
 /**
- * @file matter_thread_tinygrid.c — tinytalk's matter_thread.h on tinygrid.
+ * @file matter_thread_tinygrid.c — matter_thread.h on tinygrid, for tinytalk
+ * and for ultrawidelock (whose seam adds resolve and a dataset dump).
  *
  * The same contract tinytalk's OpenThread port keeps (ports/zephyr/thread/
  * matter_thread_port.c), and the same records on the border router: one host,
@@ -9,14 +10,25 @@
  * returns a removed service the moment the server confirms it, so there is no
  * second bank of buffers held by a client library.
  */
+#if defined(CONFIG_ULTRAWIDELOCK_MATTER)
+#include "matter_thread.h"
+
+#include "matter_clusters.h" /* MATTER_SUPPORTED_FABRICS, XPANID_LEN */
+#include "matter_fabric.h"   /* MATTER_INSTANCE_NAME_LEN */
+#define VENDOR_ID CONFIG_ULTRAWIDELOCK_MATTER_VENDOR_ID
+#define PRODUCT_ID CONFIG_ULTRAWIDELOCK_MATTER_PRODUCT_ID
+#else
 #include <tinytalk/matter_thread.h>
 
 #include <tinytalk/matter_clusters.h> /* MATTER_SUPPORTED_FABRICS, XPANID_LEN */
 #include <tinytalk/matter_fabric.h>   /* MATTER_INSTANCE_NAME_LEN */
+#define VENDOR_ID CONFIG_TINYTALK_VENDOR_ID
+#define PRODUCT_ID CONFIG_TINYTALK_PRODUCT_ID
+#endif
 
 #include <tinygrid/tg.h>
 
-#include "tg_zephyr.h"
+#include <tinygrid/tg_zephyr.h>
 
 #include <psa/crypto.h>
 #include <zephyr/kernel.h>
@@ -273,8 +285,8 @@ static void reconcile(void)
 		(void)snprintf(kv, sizeof(kv), "D=%u", (unsigned int)(s_comm.disc & 0x0fffu));
 		n += txt(s_comm.txt + n, kv);
 		n += txt(s_comm.txt + n, "CM=2");
-		(void)snprintf(kv, sizeof(kv), "VP=%u+%u", (unsigned int)CONFIG_TINYTALK_VENDOR_ID,
-			       (unsigned int)CONFIG_TINYTALK_PRODUCT_ID);
+		(void)snprintf(kv, sizeof(kv), "VP=%u+%u", (unsigned int)VENDOR_ID,
+			       (unsigned int)PRODUCT_ID);
 		n += txt(s_comm.txt + n, kv);
 		memcpy(s_comm.txt + n, s_mrp_txt, sizeof(s_mrp_txt) - 1u);
 		n += sizeof(s_mrp_txt) - 1u;
@@ -380,3 +392,62 @@ void matter_thread_advertise_reset(void)
 	memset(&s_comm, 0, sizeof(s_comm));
 	tg_zephyr_unlock();
 }
+
+#if defined(CONFIG_ULTRAWIDELOCK_MATTER)
+/* ---- ultrawidelock's additions ----------------------------------------- */
+
+/* The dataset dump is a bench aid that depends on OpenThread; with tinygrid
+ * there is nothing to print and nothing for the bench caller to retry. */
+int matter_thread_dump_active_dataset(void)
+{
+	return 0;
+}
+
+#if defined(CONFIG_ULTRAWIDELOCK_MATTER_CLIENT)
+static struct {
+	matter_thread_resolve_fn cb;
+	void *ctx;
+} s_res;
+
+/* On tinygrid's thread. A NULL peer is an answer: not found. */
+static void resolved(void *ctx, int err, const uint8_t *addr, uint16_t port)
+{
+	struct matter_thread_peer peer = {0};
+	matter_thread_resolve_fn cb = s_res.cb;
+
+	ARG_UNUSED(ctx);
+	s_res.cb = NULL;
+	if (err == TG_OK) {
+		memcpy(peer.addr, addr, 16);
+		peer.port = port;
+		peer.valid = true;
+	}
+	if (cb != NULL) {
+		cb(s_res.ctx, err == TG_OK ? &peer : NULL);
+	}
+}
+
+int matter_thread_resolve(const char *instance_name, matter_thread_resolve_fn cb, void *ctx)
+{
+	int rc;
+
+	if (instance_name == NULL || cb == NULL ||
+	    strlen(instance_name) >= MATTER_INSTANCE_NAME_LEN) {
+		return MATTER_E_INVAL;
+	}
+	tg_zephyr_lock();
+	if (s_res.cb != NULL) {
+		tg_zephyr_unlock();
+		return MATTER_E_STATE;
+	}
+	s_res.cb = cb;
+	s_res.ctx = ctx;
+	rc = tg_dns_resolve(instance_name, "_matter._tcp", resolved, NULL);
+	if (rc != TG_OK) {
+		s_res.cb = NULL;
+	}
+	tg_zephyr_unlock();
+	return rc == TG_OK ? MATTER_OK : MATTER_E_STATE;
+}
+#endif /* CONFIG_ULTRAWIDELOCK_MATTER_CLIENT */
+#endif /* CONFIG_ULTRAWIDELOCK_MATTER */

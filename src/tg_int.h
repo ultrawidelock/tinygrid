@@ -56,7 +56,7 @@ static inline void rev8(uint8_t *d, const uint8_t *s)
 }
 
 /* Deadlines, one each. */
-enum { T_MLE, T_POLL, T_REASM, T_SRP, T_N };
+enum { T_MLE, T_POLL, T_REASM, T_SRP, T_DNS, T_N };
 
 /* Attach states, under TG_DETACHED and TG_CHILD. */
 enum {
@@ -175,6 +175,7 @@ void tg_mladdr(uint8_t out[16], const uint8_t iid[8]);
 int tg_ctx_find(const uint8_t prefix[8]);
 const uint8_t *tg_ctx_prefix(uint8_t id);
 int tg_srp_send(const uint8_t *m, uint16_t n);
+#define TG_DNS_CLIENT_PORT 49998u
 
 /* tg_mle.c */
 void tg_mle_rx(const uint8_t src[16], const uint8_t dst[16], uint8_t *m, uint16_t n);
@@ -188,3 +189,7 @@ void tg_mle_netdata(const uint8_t *nd, uint8_t len);
 void tg_srp_timer(void);
 void tg_srp_rx(const uint8_t *m, uint16_t n);
 void tg_srp_kick(uint32_t delay_ms);
+
+/* tg_dns.c */
+void tg_dns_rx(const uint8_t *m, uint16_t n);
+void tg_dns_timer(void);

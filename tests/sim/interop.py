@@ -10,6 +10,7 @@ service the server then lists.
 Usage: interop.py --ot <ot-cli-ftd> --tg <tg_node> [--poll MS] [--keepalive]
 """
 import argparse
+import ipaddress
 import os
 import queue
 import re
@@ -213,6 +214,60 @@ def main():
             ot.expect(r'deleted: true', 5)
 
         check('SRP removes one service', srp_remove)
+
+        def resolve():
+            tg.send('resolve inst2 _matterc._udp')
+            m = tg.expect(r'^ev dns (ok \S+ \d+|fail -?\d+)', 15)
+            assert m.group(1) == f'ok {addrs["omr"]} 5540', m.group(1)
+            tg.send('resolve nobody _matter._tcp')
+            tg.expect(r'^ev dns fail', 15)
+
+        check('DNS-SD resolves a registered instance, and not a missing one', resolve)
+
+        def mcast_rx():
+            ot.cmd('udp open')
+            ot.cmd('udp bind :: 1234')
+            ot.drain()
+            tg.drain()
+            ot.send('udp send ff03::1 5540 hello')
+            tg.expect(r'^ev udp from \S+ 1234 len 5', 10)
+            ot.expect(r'^5 bytes from \S+ 5540 hello', 10)
+            time.sleep(1)
+            assert not any('ev udp from' in l for l in list(tg.q.queue)), 'repeat delivered'
+            ot.cmd('udp close')
+
+        # An OpenThread parent queues realm-local multicast for a sleepy child
+        # only when it relays it (mesh_forwarder_ftd.cpp); its own is sent
+        # direct. A sleepy OpenThread child misses it exactly as this one does.
+        if not a.poll:
+            check('realm-local multicast arrives once', mcast_rx)
+
+        def mcast_tx():
+            ot.cmd('udp open')
+            ot.cmd('udp bind :: 1234')
+            ot.drain()
+            tg.send('mcast 1234 group')
+            src = ot.expect(r'^5 bytes from (\S+) 5540 group', 10).group(1)
+            assert ipaddress.ip_address(src) == ipaddress.ip_address(addrs['mleid']), src
+            ot.cmd('udp close')
+
+        check('realm-local multicast leaves through the parent', mcast_tx)
+
+        def two_children():
+            tg2 = Node('tg2', [a.tg, '3', '500', work], work)
+            try:
+                tg2.expect(r'^ev up')
+                tg2.send('start ' + ds)
+                tg2.expect(r'^ev state role=2 ready=1', 30)
+                tg2.drain()
+                tg.drain()
+                tg.send('mcast 5540 hi')  # tg2 echoes it back, unicast
+                tg2.expect(r'^ev udp from ' + re.escape(addrs['mleid']) + r' 5540 len 2', 10)
+                tg.expect(r'^ev udp from \S+ 5540 len 2', 10)
+            finally:
+                tg2.stop()
+
+        check('a sleepy child hears another child\'s multicast and answers it', two_children)
 
         if a.robust:
             def keyrot():

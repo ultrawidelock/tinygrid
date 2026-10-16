@@ -7,12 +7,16 @@ and Matter on an nRF52833. It replaces OpenThread under
 What it does: attach as a child (receiver always on, or sleepy and polling),
 keep the link alive, follow the network's key rotation, configure an
 off-mesh routable address from the network data and register it with the
-parent, carry UDP (fragmented up to 1,280 B), answer pings, and register
-services over SRP.
+parent, carry UDP (fragmented up to 1,280 B) unicast and to realm-local
+multicast (MPL, repeats dropped), answer pings, register services over SRP
+and resolve them over DNS-SD.
 
-What it does not: route, lead, join or commission, CSL, link metrics,
-multicast beyond MLE, or a DNS client. It claims Thread 1.1, so a 1.2+
-parent sends it plain 2006 frames.
+What it does not: route, lead, join or commission, CSL, link metrics, or
+multicast wider than realm-local. It claims Thread 1.1, so a 1.2+ parent
+sends it plain 2006 frames.
+
+`ports/zephyr/matter_thread_tinygrid.c` is `matter_thread.h` for both
+tinytalk and ultrawidelock (which adds `matter_thread_resolve()`).
 
 ## Layout
 
@@ -33,7 +37,7 @@ baseline/           size measurement of the OpenThread it replaces
 | Command | What it does |
 |---|---|
 | `make test` | Unit tests: the Thread spec's key-derivation vectors, OpenThread's MLE encryption vector, AES-CCM* against PSA |
-| `make interop` | A host node against an OpenThread leader on its simulated radio: rx-on, sleepy, then key rotation, keep-alive, prefix change, leader reboot and parent loss |
+| `make interop` | A host node against an OpenThread leader on its simulated radio: rx-on, sleepy, then key rotation, keep-alive, prefix change, leader reboot and parent loss; DNS-SD and realm-local multicast, child to child included |
 | `baseline/build.sh <tinytalk> <dir> tinygrid` | tinytalk's door-lock on the DWM3001CDK with tinygrid, from inside an nRF Connect SDK v3.3.0 workspace |
 
 `make` needs Mbed TLS 3.6 (`MBEDTLS_PREFIX`). `make interop` needs an
@@ -44,7 +48,8 @@ from the SDK's own copy:
 cmake -S <ncs>/modules/lib/openthread -B build/ot-sim -GNinja \
   -DOT_PLATFORM=simulation -DOT_FTD=ON -DOT_MTD=OFF -DOT_RCP=OFF \
   -DOT_SRP_SERVER=ON -DOT_ECDSA=ON -DOT_SERVICE=ON -DOT_BORDER_ROUTER=ON \
-  -DOT_NETDATA_PUBLISHER=ON -DOT_PING_SENDER=ON -DOT_SIMULATION_INFRA_IF=OFF
+  -DOT_NETDATA_PUBLISHER=ON -DOT_PING_SENDER=ON -DOT_SIMULATION_INFRA_IF=OFF \
+  -DOT_DNSSD_SERVER=ON -DOT_DNS_CLIENT=ON
 ninja -C build/ot-sim ot-cli-ftd
 ```
 

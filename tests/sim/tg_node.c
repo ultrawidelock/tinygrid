@@ -10,6 +10,8 @@
  *   srp add <instance> <type> <port> [subtype]
  *   srp del <instance>
  *   srp reset                   remove host and services from the server
+ *   mcast <port> <text>         send to ff03::1 from port 5540
+ *   resolve <instance> <type>   DNS-SD: SRV, then AAAA
  *   clear                       tg_clear()
  *
  * Port 5540 echoes whatever it receives. Events print as "ev ...".
@@ -71,6 +73,20 @@ static void echo(struct tg_udp *s, const uint8_t src[16], uint16_t sport, const 
 }
 
 static struct tg_udp sock = {.port = 5540, .rx = echo};
+
+static void resolved(void *ctx, int err, const uint8_t *addr, uint16_t port)
+{
+	(void)ctx;
+	if (err == TG_OK) {
+		char a[INET6_ADDRSTRLEN];
+
+		inet_ntop(AF_INET6, addr, a, sizeof(a));
+		printf("ev dns ok %s %u\n", a, port);
+	} else {
+		printf("ev dns fail %d\n", err);
+	}
+	fflush(stdout);
+}
 
 #define NSVC 4
 static struct tg_srp_svc svc[NSVC];
@@ -177,6 +193,17 @@ static void cmd(char *l)
 				printf("ev srp svc %s state %u\n", svc[i].instance, svc[i].state);
 			}
 		}
+	} else if (!strcmp(v[0], "mcast") && n == 3) {
+		static const uint8_t all[16] = {0xff, 0x03, [15] = 1};
+
+		printf("ev mcast send %d\n",
+		       tg_udp_send(NULL, 5540, all, (uint16_t)atoi(v[1]), (uint8_t *)v[2], strlen(v[2])));
+	} else if (!strcmp(v[0], "resolve") && n == 3) {
+		static char inst[64], type[32];
+
+		snprintf(inst, sizeof(inst), "%s", v[1]);
+		snprintf(type, sizeof(type), "%s", v[2]);
+		printf("ev resolve %d\n", tg_dns_resolve(inst, type, resolved, NULL));
 	} else if (!strcmp(v[0], "clear")) {
 		tg_clear();
 	} else if (!strcmp(v[0], "quit")) {

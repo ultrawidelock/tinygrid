@@ -8,7 +8,7 @@
  * queue: received frames into a small ring of the driver's own buffers, a
  * transmit result into two words.
  */
-#include "tg_zephyr.h"
+#include <tinygrid/tg_zephyr.h>
 
 #include <tinygrid/tg.h>
 #include <tinygrid/tg_plat.h>

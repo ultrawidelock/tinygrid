@@ -172,13 +172,42 @@ static int iphc_in(uint8_t *out, uint8_t *olen, const uint8_t *p, uint8_t n,
 		q += k;
 	}
 	*olen = 40;
+	if (nh && (q[0] & 0xf0u) == 0xe0u) {
+		/* NHC extension header: hop-by-hop only, as MPL carries it. */
+		uint8_t *h = out + 40, l, ext, pad;
+		bool udp_next = q[0] & 1u;
+
+		if (((q[0] >> 1) & 7u) != 0u) {
+			return -1;
+		}
+		q++;
+		h[0] = udp_next ? 17u : *q++;
+		l = *q++;
+		if (l > 14u) {
+			return -1;
+		}
+		ext = (uint8_t)((2u + l + 7u) & ~7u);
+		h[1] = (uint8_t)(ext / 8u - 1u);
+		memcpy(h + 2, q, l);
+		q += l;
+		pad = (uint8_t)(ext - 2u - l);
+		memset(h + 2 + l, 0, pad);
+		if (pad > 1u) {
+			h[2 + l] = 1u; /* PadN */
+			h[3 + l] = (uint8_t)(pad - 2u);
+		}
+		out[6] = 0;
+		*olen = (uint8_t)(40u + ext);
+		nh = udp_next;
+	} else if (nh) {
+		out[6] = 17;
+	}
 	if (nh) {
-		uint8_t *u = out + 40;
+		uint8_t *u = out + *olen;
 
 		if ((q[0] & 0xf8u) != 0xf0u || (q[0] & 0x04u)) {
 			return -1; /* only UDP, and only with its checksum */
 		}
-		out[6] = 17;
 		switch (q[0] & 3u) {
 		case 0:
 			memcpy(u, q + 1, 4);
@@ -206,7 +235,7 @@ static int iphc_in(uint8_t *out, uint8_t *olen, const uint8_t *p, uint8_t n,
 		}
 		memcpy(u + 6, q, 2);
 		q += 2;
-		*olen = 48;
+		*olen = (uint8_t)(*olen + 8u);
 	}
 	if (q - p > n) {
 		return -1;
@@ -216,9 +245,16 @@ static int iphc_in(uint8_t *out, uint8_t *olen, const uint8_t *p, uint8_t n,
 
 static void lengths(uint8_t *pkt, uint16_t total)
 {
+	uint16_t at = 40;
+	uint8_t nh = pkt[6];
+
 	put16(pkt + 4, (uint16_t)(total - 40u));
-	if (pkt[6] == 17u) {
-		put16(pkt + 44, (uint16_t)(total - 40u));
+	if (nh == 0u) {
+		at = (uint16_t)(40u + (pkt[41] + 1u) * 8u);
+		nh = pkt[40];
+	}
+	if (nh == 17u && at + 8u <= total) {
+		put16(pkt + at + 4, (uint16_t)(total - at));
 	}
 }
 
@@ -268,9 +304,9 @@ void tg_lowpan_rx(uint8_t *p, uint8_t n, struct tg_maddr *src, struct tg_maddr *
 		return;
 	}
 	if ((p[0] & 0xe0u) == 0x60u) {
-		/* One frame expands to at most 125 - 2 + 48 bytes; the shared
+		/* One frame expands to at most 125 - 2 + 64 bytes; the shared
 		 * buffer may be holding a reassembly. */
-		uint8_t ub[176];
+		uint8_t ub[188];
 
 		k = iphc_in(ub, &hl, p, n, src, dst);
 		if (k < 0) {
@@ -365,10 +401,12 @@ uint8_t tg_iphc(uint8_t *out, const uint8_t *ip6, const struct tg_maddr *src,
 	const uint8_t *s = ip6 + 8, *d = ip6 + 24;
 	uint8_t *q = out + 3; /* room for a context byte */
 	uint8_t b0 = 0x78u, b1 = 0, cid = 0, sam = 0, dam = 0;
-	bool udp = ip6[6] == 17u;
+	bool hbh = ip6[6] == 0u;
+	const uint8_t *u = ip6 + (hbh ? 48 : 40);
+	bool udp = (hbh ? ip6[40] : ip6[6]) == 17u;
 	int c;
 
-	if (udp) {
+	if (udp || hbh) {
 		b0 |= 0x04u;
 	} else {
 		*q++ = ip6[6];
@@ -440,8 +478,16 @@ uint8_t tg_iphc(uint8_t *out, const uint8_t *ip6, const struct tg_maddr *src,
 	}
 	b1 |= dam;
 
+	if (hbh) { /* NHC extension header; the 6 MPL option bytes carry no padding */
+		*q++ = (uint8_t)(0xe0u | (udp ? 1u : 0u));
+		if (!udp) {
+			*q++ = ip6[40];
+		}
+		*q++ = 6;
+		memcpy(q, ip6 + 42, 6);
+		q += 6;
+	}
 	if (udp) {
-		const uint8_t *u = ip6 + 40;
 		uint16_t sp = get16(u), dp = get16(u + 2);
 
 		if ((sp & 0xfff0u) == 0xf0b0u && (dp & 0xfff0u) == 0xf0b0u) {

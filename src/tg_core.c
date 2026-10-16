@@ -276,8 +276,11 @@ uint32_t tg_process(void)
 			case T_REASM:
 				tg_reasm_timeout();
 				break;
-			default:
+			case T_SRP:
 				tg_srp_timer();
+				break;
+			default:
+				tg_dns_timer();
 				break;
 			}
 		}
