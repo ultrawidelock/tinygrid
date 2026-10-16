@@ -1,11 +1,11 @@
 /* SPDX-License-Identifier: ISC */
 /**
- * @file tg_plat.h — what a port provides to tinygrid, and the two radio
- * events it feeds back in.
+ * @file tg_plat.h — what a port provides to tinygrid, and the radio event
+ * it feeds back in.
  *
  * Everything here is called on the stack's context, and the port must call
- * tg_radio_rx() and tg_radio_tx_done() on that context too: a radio interrupt
- * queues, the stack's thread delivers.
+ * tg_radio_rx() on that context too: a radio interrupt queues, the stack's
+ * thread delivers.
  */
 #pragma once
 
@@ -49,25 +49,23 @@ void tg_plat_radio_set(uint8_t channel, uint16_t pan, uint16_t short_addr, const
 /** Receiver on (idle listening) or off (sleeping between polls). */
 void tg_plat_radio_rx(bool on);
 
+enum { TG_TX_OK = 0, TG_TX_NOACK = 1, TG_TX_BUSY = 2 };
+
 /**
- * Transmit one frame: the MAC header and payload, without the FCS. With an
- * ACK request in the frame the radio does CSMA-CA, waits for the ACK and
- * reports through tg_radio_tx_done(). Only one frame is ever outstanding.
+ * Transmit one frame and wait for it: the MAC header and payload, without
+ * the FCS. The radio does CSMA-CA and, with an ACK request in the frame,
+ * waits for the ACK. Returns a TG_TX_ result; @p pending gets the ACK's
+ * frame-pending bit. Frames received meanwhile wait in the port: it calls
+ * tg_radio_rx() only after this returns.
  */
-int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len);
+int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len, bool *pending);
 
 /** Something a user of tinygrid may care about changed (role, addresses, SRP). */
 void tg_plat_changed(void);
 
-enum { TG_TX_OK = 0, TG_TX_NOACK = 1, TG_TX_BUSY = 2 };
-
 /** A frame without its FCS, past the radio's filter on the PAN ID and
  * destination address of tg_plat_radio_set() (as tg_phy_filter() does). */
 void tg_radio_rx(const uint8_t *psdu, uint8_t len, int8_t rssi);
-
-/** The frame passed to tg_plat_radio_tx() is done. @p pending: the ACK had
- * its frame-pending bit set. */
-void tg_radio_tx_done(int result, bool pending);
 
 #ifdef __cplusplus
 }

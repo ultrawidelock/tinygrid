@@ -56,11 +56,12 @@ void tg_plat_radio_set(uint8_t channel, uint16_t pan, uint16_t short_addr, const
 	(void)ext;
 }
 void tg_plat_radio_rx(bool on) { (void)on; }
-int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len)
+int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len, bool *pending)
 {
 	(void)psdu;
 	(void)len;
-	return 0;
+	*pending = false;
+	return TG_TX_OK;
 }
 void tg_plat_changed(void) {}
 

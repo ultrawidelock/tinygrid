@@ -7,10 +7,6 @@
 
 #include <string.h>
 
-#ifndef TG_TX_FRAMES
-/* A 1,232 B datagram is 13 fragments; three more for MLE and SRP alongside. */
-#define TG_TX_FRAMES 16
-#endif
 #ifndef TG_CHILD_TIMEOUT_S
 #define TG_CHILD_TIMEOUT_S 240u
 #endif

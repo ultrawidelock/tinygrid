@@ -515,9 +515,14 @@ ISR_DIRECT_DECLARE(poke_isr)
 	return 0;
 }
 
+static K_SEM_DEFINE(s_tx_done, 0, 1);
+
 static void wake_isr(const void *arg)
 {
 	ARG_UNUSED(arg);
+	if (s_tx_res >= 0) {
+		k_sem_give(&s_tx_done);
+	}
 	k_sem_give(&tg_zephyr_wake);
 }
 
@@ -547,23 +552,24 @@ void tg_plat_radio_rx(bool on)
 	kick();
 }
 
-int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len)
+int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len, bool *pending)
 {
+	int8_t r;
+
 	s_tx[0] = (uint8_t)(len + 2u);
 	memcpy(s_tx + 1, psdu, len);
 	req_tx = true;
 	kick();
-	return 0;
+	while ((r = s_tx_res) < 0) {
+		(void)k_sem_take(&s_tx_done, K_FOREVER);
+	}
+	s_tx_res = -1;
+	*pending = s_tx_pend;
+	return r;
 }
 
 void tg_zephyr_radio_poll(void)
 {
-	int8_t r = s_tx_res;
-
-	if (r >= 0) {
-		s_tx_res = -1;
-		tg_radio_tx_done(r, s_tx_pend);
-	}
 	while (s_rx_head != s_rx_tail) {
 		uint8_t *f = s_rxq[s_rx_head % RXQ].f;
 

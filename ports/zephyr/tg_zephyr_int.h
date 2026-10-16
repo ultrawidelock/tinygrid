@@ -10,6 +10,6 @@ extern struct k_sem tg_zephyr_wake;
 /** Once, before the thread starts. */
 int tg_zephyr_radio_init(void);
 
-/** On the stack's thread with the lock held: hand queued frames and the
- * transmit result to tg_radio_rx() and tg_radio_tx_done(). */
+/** On the stack's thread with the lock held: hand queued frames to
+ * tg_radio_rx(). */
 void tg_zephyr_radio_poll(void);

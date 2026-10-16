@@ -7,8 +7,8 @@
  * The simulation radio (openthread examples/platforms/simulation) sends every
  * frame as one UDP datagram, [channel][PSDU with FCS], to 224.0.0.116 port
  * 9000 from port 9000 + node id, on 127.0.0.1. There is no hardware, so this
- * file does what a radio does: address filtering and ACKs (tg_phy.h), and
- * the ACK wait.
+ * file does what a radio does: address filtering and ACKs (tg_phy.h), the
+ * ACK wait, and holding what arrives during a transmit, four frames deep.
  */
 #define _DEFAULT_SOURCE
 #include "tg_host.h"
@@ -31,6 +31,7 @@
 #define PORT_BASE 9000
 #define GROUP "224.0.0.116"
 #define ACK_WAIT_MS 16u
+#define HELD 4u
 
 static int rx_fd = -1, tx_fd = -1, node;
 static struct sockaddr_in group;
@@ -40,10 +41,14 @@ static uint8_t r_chan = 11;
 static struct tg_phy_addr r_addr = {.pan = 0xffffu, .short_addr = 0xfffeu};
 static bool r_on;
 
-static bool ack_wait, done_pending, done_pend_fp;
-static int done_result;
+static bool ack_wait, ack_pend, in_tx;
 static uint8_t ack_seq;
-static uint32_t ack_due;
+
+/* Frames that arrived while a transmit waited, for after it. */
+static struct {
+	uint8_t f[127], len;
+} held[HELD];
+static uint8_t held_head, held_n;
 
 uint32_t tg_plat_now(void)
 {
@@ -145,19 +150,39 @@ static void sim_send(const uint8_t *psdu, uint8_t len)
 	(void)sendto(tx_fd, m, (size_t)len + 3u, 0, (struct sockaddr *)&group, sizeof(group));
 }
 
-int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len)
+static void sim_rx(void);
+
+int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len, bool *pending)
 {
+	uint32_t due = tg_plat_now() + ACK_WAIT_MS;
+
+	*pending = false;
 	sim_send(psdu, len);
-	if (psdu[0] & 0x20u) { /* ACK requested */
-		ack_wait = true;
-		ack_seq = psdu[2];
-		ack_due = tg_plat_now() + ACK_WAIT_MS;
-	} else {
-		done_pending = true; /* reported from the loop, never re-entrantly */
-		done_result = TG_TX_OK;
-		done_pend_fp = false;
+	if (!(psdu[0] & 0x20u)) {
+		return TG_TX_OK;
 	}
-	return 0;
+	ack_wait = in_tx = true;
+	ack_seq = psdu[2];
+	while (ack_wait) {
+		int32_t d = (int32_t)(due - tg_plat_now());
+		struct timeval tv;
+		fd_set rs;
+
+		if (d <= 0) {
+			ack_wait = in_tx = false;
+			return TG_TX_NOACK;
+		}
+		tv.tv_sec = 0;
+		tv.tv_usec = d * 1000;
+		FD_ZERO(&rs);
+		FD_SET(rx_fd, &rs);
+		if (select(rx_fd + 1, &rs, NULL, NULL, &tv) > 0) {
+			sim_rx();
+		}
+	}
+	in_tx = false;
+	*pending = ack_pend;
+	return TG_TX_OK;
 }
 
 static void sim_rx(void)
@@ -178,19 +203,26 @@ static void sim_rx(void)
 	if ((f[0] & 7u) == 2u) { /* an ACK */
 		if (ack_wait && tg_phy_ack_rx(f, len, ack_seq, &pending)) {
 			ack_wait = false;
-			tg_radio_tx_done(TG_TX_OK, pending);
+			ack_pend = pending;
 		}
 		return;
 	}
 	keep = r_on ? tg_phy_filter(&r_addr, f, len) : TG_PHY_DROP;
-	if (keep == TG_PHY_DROP) {
-		return;
+	if (keep == TG_PHY_DROP || (in_tx && held_n == HELD)) {
+		return; /* with nowhere to hold it, not ACKed either */
 	}
 	if (keep == TG_PHY_ACK) {
 		uint8_t a[3];
 
 		tg_phy_ack(a, f[2]);
 		sim_send(a, 3);
+	}
+	if (in_tx) {
+		uint8_t i = (uint8_t)((held_head + held_n++) % HELD);
+
+		memcpy(held[i].f, f, len);
+		held[i].len = len;
+		return;
 	}
 	tg_radio_rx(f, len, -20);
 }
@@ -244,22 +276,13 @@ int tg_host_step(int extra_fd)
 	fd_set rs;
 	int mx = rx_fd > extra_fd ? rx_fd : extra_fd;
 
-	if (done_pending) {
-		done_pending = false;
-		tg_radio_tx_done(done_result, done_pend_fp);
-		return 0;
-	}
-	if (ack_wait) {
-		int32_t d = (int32_t)(ack_due - tg_plat_now());
+	if (held_n) {
+		uint8_t i = held_head;
 
-		if (d <= 0) {
-			ack_wait = false;
-			tg_radio_tx_done(TG_TX_NOACK, false);
-			return 0;
-		}
-		if ((uint32_t)d < wait) {
-			wait = (uint32_t)d;
-		}
+		held_head = (uint8_t)((held_head + 1u) % HELD);
+		held_n--;
+		tg_radio_rx(held[i].f, held[i].len, -20);
+		return 0;
 	}
 	if (wait > 1000u) {
 		wait = 1000u;

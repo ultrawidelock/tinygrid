@@ -3,7 +3,7 @@
  * tg_plat.h's radio on Nordic's nRF 802.15.4 driver, which shares the radio
  * with Bluetooth through MPSL on its own. Driver callouts only queue:
  * received frames into a small ring of the driver's own buffers, a transmit
- * result into two words.
+ * result into two words and a semaphore the transmit waits on.
  */
 #include "tg_zephyr_int.h"
 
@@ -23,6 +23,7 @@ static uint8_t s_rx_head, s_rx_n;
 static struct k_spinlock s_rx_lock;
 static atomic_t s_tx_result = ATOMIC_INIT(-1);
 static bool s_tx_pending_bit;
+static K_SEM_DEFINE(s_tx_done, 0, 1);
 static uint8_t s_tx[1 + 127]; /* PHR, then the PSDU */
 
 void tg_plat_radio_set(uint8_t channel, uint16_t pan, uint16_t short_addr, const uint8_t ext[8])
@@ -52,7 +53,7 @@ void tg_plat_radio_rx(bool on)
 	}
 }
 
-int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len)
+int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len, bool *pending)
 {
 	const nrf_802154_transmit_csma_ca_metadata_t md = {
 		/* Secured, counters and all, before it got here. */
@@ -60,9 +61,19 @@ int tg_plat_radio_tx(const uint8_t *psdu, uint8_t len)
 		.tx_power = {.use_metadata_value = true, .power = CONFIG_TINYGRID_TX_POWER},
 	};
 
+	atomic_val_t r;
+
+	*pending = false;
 	s_tx[0] = (uint8_t)(len + 2u); /* PHR counts the FCS the radio appends */
 	memcpy(s_tx + 1, psdu, len);
-	return nrf_802154_transmit_csma_ca_raw(s_tx, &md) == NRF_802154_TX_ERROR_NONE ? 0 : -1;
+	if (nrf_802154_transmit_csma_ca_raw(s_tx, &md) != NRF_802154_TX_ERROR_NONE) {
+		return TG_TX_BUSY;
+	}
+	while ((r = atomic_set(&s_tx_result, -1)) < 0) {
+		(void)k_sem_take(&s_tx_done, K_FOREVER);
+	}
+	*pending = s_tx_pending_bit;
+	return (int)r;
 }
 
 void nrf_802154_received_timestamp_raw(uint8_t *p, int8_t power, uint8_t lqi, uint64_t time)
@@ -94,7 +105,7 @@ void nrf_802154_transmitted_raw(uint8_t *frame, const nrf_802154_transmit_done_m
 		nrf_802154_buffer_free_raw(ack);
 	}
 	atomic_set(&s_tx_result, TG_TX_OK);
-	k_sem_give(&tg_zephyr_wake);
+	k_sem_give(&s_tx_done);
 }
 
 void nrf_802154_transmit_failed(uint8_t *frame, nrf_802154_tx_error_t err,
@@ -107,7 +118,7 @@ void nrf_802154_transmit_failed(uint8_t *frame, nrf_802154_tx_error_t err,
 					 err == NRF_802154_TX_ERROR_INVALID_ACK
 				 ? TG_TX_NOACK
 				 : TG_TX_BUSY);
-	k_sem_give(&tg_zephyr_wake);
+	k_sem_give(&s_tx_done);
 }
 
 int tg_zephyr_radio_init(void)
@@ -120,14 +131,10 @@ int tg_zephyr_radio_init(void)
 void tg_zephyr_radio_poll(void)
 {
 	for (;;) {
-		atomic_val_t r = atomic_set(&s_tx_result, -1);
 		k_spinlock_key_t k;
 		uint8_t *p = NULL;
 		int8_t rssi = 0;
 
-		if (r >= 0) {
-			tg_radio_tx_done((int)r, s_tx_pending_bit);
-		}
 		k = k_spin_lock(&s_rx_lock);
 		if (s_rx_n) {
 			p = s_rxq[s_rx_head].p;

@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: ISC */
 /*
  * IEEE 802.15.4 framing for a Thread child: 2006 frames, security level 5 with
- * key id mode 1, a ring of frames that are built and secured when queued, and
- * the data polls of a sleepy child.
+ * key id mode 1, each built, secured and sent before the next, and the data
+ * polls of a sleepy child.
  *
  * Frames go only to the parent or to broadcast, so the only secured sender
  * this ever has to verify is the parent.
@@ -19,41 +19,48 @@
 #define FCF_ACKREQ 0x0020u
 #define FCF_PANC 0x0040u
 
-struct txf {
-	uint8_t len, tries;
-	uint16_t tag; /* frames of one datagram share it; 0 for a poll */
-	uint8_t f[PSDU_MAX];
-};
-
-static struct txf q[TG_TX_FRAMES];
-static uint8_t q_head, q_n, seq;
-static bool q_busy;
-static uint16_t tag_next = 1;
+static uint8_t seq;
+static uint16_t tag_next;
 
 void tg_mac_reset(void)
 {
-	q_n = q_busy ? 1u : 0u; /* the frame on air finishes on its own */
 	tg.rx_window = false;
 	tg.fast_polls = 0;
 }
 
-static void kick(void)
+static void window_open(void);
+
+/* One frame, retried as macMaxFrameRetries allows. Frames received meanwhile
+ * wait in the port, so nothing a caller sends from changes under it. */
+static int xmit(const uint8_t *f, uint8_t len, bool *pending)
 {
-	if (!q_busy && q_n) {
-		q_busy = true;
-		if (tg_plat_radio_tx(q[q_head].f, q[q_head].len) != 0) {
-			tg_radio_tx_done(TG_TX_BUSY, false);
+	for (uint8_t tries = 0;; tries++) {
+		int res = tg_plat_radio_tx(f, len, pending);
+
+		if (res == TG_TX_OK || tries == RETRIES) {
+			return res;
 		}
 	}
 }
 
-static struct txf *slot(void)
+/* What a frame's fate, f the last one sent, says about the parent. */
+static void sent(const uint8_t *f, int res, bool pending, bool poll)
 {
-	struct txf *t = &q[(q_head + q_n) % TG_TX_FRAMES];
-
-	q_n++;
-	t->tries = 0;
-	return t;
+	if (!(le16(f) & FCF_ACKREQ)) {
+		return;
+	}
+	if (res != TG_TX_OK) {
+		if (poll) {
+			tg_mle_poll_failed();
+		} else {
+			tg_mle_tx_failed();
+		}
+	} else {
+		tg.txfail = 0;
+		if (POLL_MS && pending && tg.role == TG_CHILD) {
+			window_open();
+		}
+	}
 }
 
 /* The MAC header, auxiliary security header included. */
@@ -119,53 +126,42 @@ int tg_mac_send(const uint8_t *hdr, uint8_t hlen, const uint8_t *data, uint16_t 
 		uint16_t total, const struct tg_maddr *dst, bool src_ext, bool secure)
 {
 	uint32_t fc = 0;
+	uint8_t f[PSDU_MAX], len;
 	uint8_t mh = (uint8_t)(5u + (dst->mode == 3u ? 8u : 2u) + (src_ext ? 8u : 2u));
 	uint8_t cap = (uint8_t)(PSDU_MAX - mh - (secure ? 10u : 0u));
 	uint16_t uhdr = (uint16_t)(total - dlen); /* uncompressed bytes hdr stands for */
-	uint16_t first, chunk, nfr, off;
+	uint16_t first, chunk, off;
 	uint16_t tag = tag_next++;
+	bool pend = false, pending = false;
+	int res = TG_TX_OK;
 
-	if (tag == 0u) {
-		tag = tag_next++;
-	}
 	if (hlen + dlen <= cap) {
-		struct txf *t;
-
-		if (q_n == TG_TX_FRAMES) {
-			return TG_E_BUSY;
-		}
-		t = slot();
-		t->tag = tag;
-		mh = mhr(t->f, 1, dst, src_ext, secure, &fc);
-		memcpy(t->f + mh, hdr, hlen);
-		memcpy(t->f + mh + hlen, data, dlen);
-		t->len = (uint8_t)(mh + hlen + dlen);
+		mh = mhr(f, 1, dst, src_ext, secure, &fc);
+		memcpy(f + mh, hdr, hlen);
+		memcpy(f + mh + hlen, data, dlen);
+		len = (uint8_t)(mh + hlen + dlen);
 		if (secure) {
-			t->len = seal(t->f, mh, t->len, fc);
+			len = seal(f, mh, len, fc);
 		}
-		kick();
+		res = xmit(f, len, &pend);
 		sed_traffic();
+		sent(f, res, pend, false);
 		return TG_OK;
 	}
 
-	/* RFC 4944 fragments: offsets count uncompressed bytes in units of 8. */
+	/* RFC 4944 fragments, the first that fails dropping the rest: offsets
+	 * count uncompressed bytes in units of 8. */
 	if (hlen + 12u > cap) {
 		return TG_E_INVAL;
 	}
 	first = (uint16_t)(((uhdr + cap - 4u - hlen) & ~7u) - uhdr);
 	chunk = (uint16_t)((cap - 5u) & ~7u);
-	nfr = (uint16_t)(1u + (dlen - first + chunk - 1u) / chunk);
-	if (nfr > TG_TX_FRAMES - q_n) {
-		return TG_E_BUSY;
-	}
-	for (off = 0; off < dlen;) {
-		struct txf *t = slot();
+	for (off = 0; off < dlen && res == TG_TX_OK;) {
 		uint8_t *p;
 		uint16_t n;
 
-		t->tag = tag;
-		mh = mhr(t->f, 1, dst, src_ext, secure, &fc);
-		p = t->f + mh;
+		mh = mhr(f, 1, dst, src_ext, secure, &fc);
+		p = f + mh;
 		if (off == 0u) {
 			put16(p, (uint16_t)(0xc000u | total));
 			put16(p + 2, tag);
@@ -182,13 +178,15 @@ int tg_mac_send(const uint8_t *hdr, uint8_t hlen, const uint8_t *data, uint16_t 
 		memcpy(p, data + off, n);
 		p += n;
 		off = (uint16_t)(off + n);
-		t->len = (uint8_t)(p - t->f);
+		len = (uint8_t)(p - f);
 		if (secure) {
-			t->len = seal(t->f, mh, t->len, fc);
+			len = seal(f, mh, len, fc);
 		}
+		res = xmit(f, len, &pending);
+		pend |= pending;
 	}
-	kick();
 	sed_traffic();
+	sent(f, res, pend, false);
 	return TG_OK;
 }
 
@@ -196,25 +194,16 @@ int tg_mac_send(const uint8_t *hdr, uint8_t hlen, const uint8_t *data, uint16_t 
 void tg_mac_poll(void)
 {
 	struct tg_maddr dst = {.mode = 2};
-	struct txf *t;
+	uint8_t f[PSDU_MAX], mh;
 	uint32_t fc;
-	uint8_t mh;
+	bool pending = false;
+	int res;
 
-	for (uint8_t i = 0; i < q_n; i++) {
-		if (q[(q_head + i) % TG_TX_FRAMES].tag == 0u) {
-			return; /* one already waiting */
-		}
-	}
-	if (q_n == TG_TX_FRAMES) {
-		return;
-	}
 	dst.s = tg.role == TG_CHILD ? tg.par.rloc : tg.cand.rloc;
-	t = slot();
-	t->tag = 0;
-	mh = mhr(t->f, 3, &dst, tg.role != TG_CHILD, true, &fc);
-	t->f[mh] = 0x04; /* Data Request; authenticated as header in a 2006 frame */
-	t->len = seal(t->f, (uint8_t)(mh + 1u), (uint8_t)(mh + 1u), fc);
-	kick();
+	mh = mhr(f, 3, &dst, tg.role != TG_CHILD, true, &fc);
+	f[mh] = 0x04; /* Data Request; authenticated as header in a 2006 frame */
+	res = xmit(f, seal(f, (uint8_t)(mh + 1u), (uint8_t)(mh + 1u), fc), &pending);
+	sent(f, res, pending, true);
 }
 
 static void window_open(void)
@@ -256,43 +245,6 @@ void tg_mac_poll(void) {}
 static void window_open(void) {}
 static void next_poll(void) {}
 #endif
-
-void tg_radio_tx_done(int res, bool pending)
-{
-	struct txf *t = &q[q_head];
-	bool ackreq = (le16(t->f) & FCF_ACKREQ) != 0u;
-	uint16_t tag = t->tag;
-
-	if (!q_busy) {
-		return;
-	}
-	q_busy = false;
-	if (res != TG_TX_OK && t->tries++ < RETRIES) {
-		kick();
-		return;
-	}
-	q_head = (uint8_t)((q_head + 1u) % TG_TX_FRAMES);
-	q_n--;
-	if (res != TG_TX_OK) {
-		while (tag && q_n && q[q_head].tag == tag) {
-			q_head = (uint8_t)((q_head + 1u) % TG_TX_FRAMES);
-			q_n--;
-		}
-		if (ackreq) {
-			if (tag) {
-				tg_mle_tx_failed();
-			} else {
-				tg_mle_poll_failed();
-			}
-		}
-	} else if (ackreq) {
-		tg.txfail = 0;
-		if (POLL_MS && pending && tg.role == TG_CHILD) {
-			window_open();
-		}
-	}
-	kick();
-}
 
 void tg_radio_rx(const uint8_t *in, uint8_t len, int8_t rssi)
 {
