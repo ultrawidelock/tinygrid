@@ -270,17 +270,21 @@ uint32_t tg_process(void)
 			case T_MLE:
 				tg_mle_timer();
 				break;
+#if TG_SED
 			case T_POLL:
 				tg_mac_timer_poll();
 				break;
+#endif
 			case T_REASM:
 				tg_reasm_timeout();
 				break;
-			case T_SRP:
-				tg_srp_timer();
-				break;
-			default:
+#if TG_DNS
+			case T_DNS:
 				tg_dns_timer();
+				break;
+#endif
+			default:
+				tg_srp_timer();
 				break;
 			}
 		}

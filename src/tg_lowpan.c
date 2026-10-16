@@ -172,6 +172,7 @@ static int iphc_in(uint8_t *out, uint8_t *olen, const uint8_t *p, uint8_t n,
 		q += k;
 	}
 	*olen = 40;
+#if TG_MCAST
 	if (nh && (q[0] & 0xf0u) == 0xe0u) {
 		/* NHC extension header: hop-by-hop only, as MPL carries it. */
 		uint8_t *h = out + 40, l, ext, pad;
@@ -199,7 +200,9 @@ static int iphc_in(uint8_t *out, uint8_t *olen, const uint8_t *p, uint8_t n,
 		out[6] = 0;
 		*olen = (uint8_t)(40u + ext);
 		nh = udp_next;
-	} else if (nh) {
+	} else
+#endif
+	if (nh) {
 		out[6] = 17;
 	}
 	if (nh) {
@@ -478,6 +481,7 @@ uint8_t tg_iphc(uint8_t *out, const uint8_t *ip6, const struct tg_maddr *src,
 	}
 	b1 |= dam;
 
+#if TG_MCAST
 	if (hbh) { /* NHC extension header; the 6 MPL option bytes carry no padding */
 		*q++ = (uint8_t)(0xe0u | (udp ? 1u : 0u));
 		if (!udp) {
@@ -487,6 +491,7 @@ uint8_t tg_iphc(uint8_t *out, const uint8_t *ip6, const struct tg_maddr *src,
 		memcpy(q, ip6 + 42, 6);
 		q += 6;
 	}
+#endif
 	if (udp) {
 		uint16_t sp = get16(u), dp = get16(u + 2);
 

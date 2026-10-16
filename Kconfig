@@ -21,6 +21,21 @@ config TINYGRID_POLL_MS
 	  sleeps. Anything else attaches as a sleepy end device (SED) that
 	  polls its parent this often.
 
+config TINYGRID_DNS
+	bool "DNS-SD resolver (tg_dns_resolve)"
+	default y if ULTRAWIDELOCK_MATTER_CLIENT
+	help
+	  Resolving another node's service instance, which only a Matter
+	  client does. About 1 KB of flash.
+
+config TINYGRID_MULTICAST
+	bool "Realm-local multicast (ff03::/16) with MPL"
+	default y if ULTRAWIDELOCK_MATTER
+	help
+	  Sending to and hearing from the realm-local groups, as
+	  ultrawidelock's sealed link does. Without it only MLE uses
+	  multicast, and link-local only.
+
 config TINYGRID_CHILD_TIMEOUT
 	int "Child timeout (s)"
 	default 240

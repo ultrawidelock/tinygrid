@@ -30,6 +30,9 @@ OT_CLI ?= build/ot-sim/examples/apps/cli/ot-cli-ftd
 
 test: $(BUILD)/tests
 	$(BUILD)/tests
+	@# The smallest build: rx-on only, no resolver, no multicast.
+	$(CC) $(CSTD) $(WARN) -Iinclude -DTG_SED=0 -DTG_DNS=0 -DTG_MCAST=0 -fsyntax-only \
+		$(filter-out src/tg_dns.c,$(wildcard src/*.c))
 
 $(BUILD)/tests: $(CORE) $(wildcard tests/host/*.c) $(HDRS)
 	@mkdir -p $(BUILD)

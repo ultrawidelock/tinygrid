@@ -109,7 +109,7 @@ static uint8_t seal(uint8_t *f, uint8_t hdr, uint8_t len, uint32_t fc)
 
 static void sed_traffic(void)
 {
-	if (tg.poll_ms && tg.role == TG_CHILD) {
+	if (POLL_MS && tg.role == TG_CHILD) {
 		tg.fast_polls = 5;
 		tg_arm(T_POLL, FAST_POLL_MS);
 	}
@@ -192,6 +192,7 @@ int tg_mac_send(const uint8_t *hdr, uint8_t hlen, const uint8_t *data, uint16_t 
 	return TG_OK;
 }
 
+#if TG_SED
 void tg_mac_poll(void)
 {
 	struct tg_maddr dst = {.mode = 2};
@@ -225,7 +226,7 @@ static void window_open(void)
 
 static void next_poll(void)
 {
-	uint32_t ms = tg.poll_ms;
+	uint32_t ms = POLL_MS;
 
 	if (tg.fast_polls) {
 		tg.fast_polls--;
@@ -250,6 +251,11 @@ void tg_mac_timer_poll(void)
 		next_poll();
 	}
 }
+#else
+void tg_mac_poll(void) {}
+static void window_open(void) {}
+static void next_poll(void) {}
+#endif
 
 void tg_radio_tx_done(int res, bool pending)
 {
@@ -281,7 +287,7 @@ void tg_radio_tx_done(int res, bool pending)
 		}
 	} else if (ackreq) {
 		tg.txfail = 0;
-		if (tg.poll_ms && pending && tg.role == TG_CHILD) {
+		if (POLL_MS && pending && tg.role == TG_CHILD) {
 			window_open();
 		}
 	}
@@ -400,7 +406,7 @@ void tg_radio_rx(const uint8_t *in, uint8_t len, int8_t rssi)
 	if (type == 3u) {
 		return; /* nothing a child needs from MAC commands */
 	}
-	if (sec && tg.poll_ms) {
+	if (sec && POLL_MS) {
 		if (fcf & FCF_PENDING) {
 			tg.rx_window = false;
 			tg_mac_poll();

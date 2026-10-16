@@ -14,6 +14,19 @@
 #ifndef TG_CHILD_TIMEOUT_S
 #define TG_CHILD_TIMEOUT_S 240u
 #endif
+/* Optional parts, all on unless a build turns them off. */
+#ifndef TG_SED /* sleepy polling; 0 builds an rx-on child only */
+#define TG_SED 1
+#endif
+#ifndef TG_DNS /* tg_dns_resolve() */
+#define TG_DNS 1
+#endif
+#ifndef TG_MCAST /* realm-local multicast with MPL */
+#define TG_MCAST 1
+#endif
+/* The poll period, or a constant 0 that lets the compiler drop polling. */
+#define POLL_MS (TG_SED ? tg.poll_ms : 0u)
+
 #define TG_CONTEXTS 4
 #define TG_PKT_MAX 1280u
 #define TG_DATASET_MAX 254u

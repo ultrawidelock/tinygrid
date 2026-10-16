@@ -61,7 +61,7 @@ static uint8_t leader_raw[8];
 
 static uint8_t mode_byte(void)
 {
-	return tg.poll_ms ? 0x00u : 0x08u; /* rx-on-when-idle; MTD; stable data only */
+	return POLL_MS ? 0x00u : 0x08u; /* rx-on-when-idle; MTD; stable data only */
 }
 
 static const uint8_t *tlv(const uint8_t *p, uint16_t n, uint8_t type, uint8_t len)
@@ -159,7 +159,7 @@ static uint8_t *areg(uint8_t *p, bool omr)
 
 static void sed_expect_reply(void)
 {
-	if (tg.poll_ms) {
+	if (POLL_MS) {
 		tg.fast_polls = 10;
 		tg_arm(T_POLL, 100);
 	}
@@ -236,7 +236,7 @@ static void send_cidreq(void)
 	tg.ast = A_CIDREQ;
 	tg_arm(T_MLE, CIDRSP_MS);
 	(void)finish(m, p, dst);
-	if (tg.poll_ms) { /* a sleepy child's answer waits for its poll */
+	if (POLL_MS) { /* a sleepy child's answer waits for its poll */
 		tg.fast_polls = 12;
 		tg_arm(T_POLL, 100);
 	}
@@ -505,10 +505,10 @@ static void on_cidrsp(const uint8_t ext[8], const uint8_t *t, uint16_t n, uint32
 	tg.tries = 0;
 	tg.txfail = 0;
 	tg_plat_radio_set(tg.chan, tg.pan, tg.rloc, tg.ext);
-	if (tg.poll_ms) {
+	if (POLL_MS) {
 		tg_plat_radio_rx(false);
 		tg.fast_polls = 0;
-		tg_arm(T_POLL, tg.poll_ms);
+		tg_arm(T_POLL, POLL_MS);
 	}
 	tg.sver = ld[6];
 	tg.part = get32(ld);

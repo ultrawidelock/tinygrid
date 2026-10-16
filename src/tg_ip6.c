@@ -100,6 +100,7 @@ static uint16_t csum(const uint8_t *ip6, uint8_t nh, const uint8_t *l4, const ui
 	return (uint16_t)s;
 }
 
+#if TG_MCAST
 static bool realm_mcast(const uint8_t *a)
 {
 	return a[0] == 0xffu && (a[1] & 0x0fu) == 3u;
@@ -124,6 +125,7 @@ static bool mpl_seen(uint16_t seed, uint8_t seq)
 	seen_next = (uint8_t)((seen_next + 1u) & 3u);
 	return false;
 }
+#endif
 
 /*
  * Send one datagram. ip6 holds the 40-byte header, then (for realm-local
@@ -190,6 +192,7 @@ int tg_ip6_send_udp(const uint8_t src[16], const uint8_t dst[16], uint8_t hlim, 
 	ip6[7] = hlim;
 	memcpy(ip6 + 8, src, 16);
 	memcpy(ip6 + 24, dst, 16);
+#if TG_MCAST
 	if (!mle && realm_mcast(dst)) {
 		/* MPL, as OpenThread seeds it from a non-RLOC source: S=1 and the
 		 * RLOC16 as the seed (ip6_mpl.cpp). Six option bytes, no padding. */
@@ -206,6 +209,7 @@ int tg_ip6_send_udp(const uint8_t src[16], const uint8_t dst[16], uint8_t hlim, 
 		(void)mpl_seen(tg.rloc, seq++); /* the parent echoes it back */
 		u += 8;
 	}
+#endif
 	put16(u, sport);
 	put16(u + 2, dport);
 	return send(ip6, data, len, mle);
@@ -267,6 +271,7 @@ void tg_ip6_rx(uint8_t *pkt, uint16_t len, bool sec)
 	if (len < 48u || (pkt[0] >> 4) != 6u || !tg_is_ours(dst)) {
 		return;
 	}
+#if TG_MCAST
 	if (nh == 0u) { /* hop-by-hop: only MPL is understood, and only to drop repeats */
 		uint16_t ext = (uint16_t)((p[1] + 1u) * 8u);
 
@@ -287,6 +292,7 @@ void tg_ip6_rx(uint8_t *pkt, uint16_t len, bool sec)
 		p += ext;
 		n = (uint16_t)(n - ext);
 	}
+#endif
 	{
 		uint8_t l4[8];
 
@@ -314,12 +320,14 @@ void tg_ip6_rx(uint8_t *pkt, uint16_t len, bool sec)
 			}
 			return;
 		}
+#if TG_DNS
 		if (dport == TG_DNS_CLIENT_PORT) {
 			if (sport == 53u) {
 				tg_dns_rx(p + 8, (uint16_t)(n - 8u));
 			}
 			return;
 		}
+#endif
 		for (struct tg_udp *s = tg.socks; s; s = s->next) {
 			if (s->port == dport) {
 				s->rx(s, src, sport, dst, p + 8, (size_t)(n - 8u));
