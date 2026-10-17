@@ -76,6 +76,25 @@ bool tg_is_ours(const uint8_t a[16])
 	return tg.role == TG_CHILD && memcmp(a, m, 16) == 0;
 }
 
+uint8_t tg_addrs(uint8_t (*out)[16], uint8_t max)
+{
+	uint8_t n = 0;
+
+	if (n < max && tg_omr(out[n])) {
+		n++;
+	}
+	if (n < max && tg_mleid(out[n])) {
+		n++;
+	}
+	if (n < max && tg.role == TG_CHILD) {
+		rloc_addr(out[n++]);
+	}
+	if (n < max) {
+		tg_lladdr(out[n++], tg.ext);
+	}
+	return n;
+}
+
 static uint32_t sum(uint32_t s, const uint8_t *p, size_t n)
 {
 	for (; n > 1u; n -= 2u, p += 2) {

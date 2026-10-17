@@ -261,6 +261,11 @@ bool tg_mleid(uint8_t out[16])
 	return true;
 }
 
+void tg_ext_addr(uint8_t out[8])
+{
+	memcpy(out, tg.ext, 8);
+}
+
 uint32_t tg_process(void)
 {
 	uint32_t now = tg_plat_now(), next = UINT32_MAX;

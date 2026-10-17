@@ -38,7 +38,7 @@
 #include <string.h>
 
 #if !defined(CONFIG_ULTRAWIDELOCK_MATTER)
-BUILD_ASSERT(MATTER_THREAD_API == 1, "matter_thread.h changed: review this adapter");
+BUILD_ASSERT(MATTER_THREAD_API == 2, "matter_thread.h changed: review this adapter");
 #endif
 
 static K_SEM_DEFINE(s_changed, 0, 1);
@@ -114,6 +114,34 @@ int matter_thread_wait_attached(uint32_t timeout_ms)
 		(void)k_sem_take(&s_changed, K_MSEC(timeout_ms - waited));
 	}
 }
+
+/* ---- the interface, for General Diagnostics ---------------------------- */
+
+#if !defined(CONFIG_ULTRAWIDELOCK_MATTER) /* MATTER_THREAD_API 2, tinytalk's seam */
+
+int matter_thread_interface(struct matter_thread_iface *out)
+{
+	memset(out, 0, sizeof(*out));
+	tg_zephyr_lock();
+	out->attached = tg_role() == TG_CHILD;
+	tg_ext_addr(out->ext_addr);
+	out->n_addrs = tg_addrs(out->addrs, MATTER_THREAD_IFACE_ADDRS_MAX);
+	tg_zephyr_unlock();
+	out->thread_version = 2; /* Thread 1.1, the version tinygrid claims */
+	return MATTER_OK;
+}
+
+/* tinygrid has no active scan: ScanNetworks gets the header's "no scan". */
+int matter_thread_scan(struct matter_thread_scan_result *out, uint8_t cap, uint8_t *n)
+{
+	ARG_UNUSED(out);
+	ARG_UNUSED(cap);
+	if (n != NULL) {
+		*n = 0;
+	}
+	return MATTER_E_STATE;
+}
+#endif
 
 /* ---- datagrams --------------------------------------------------------- */
 

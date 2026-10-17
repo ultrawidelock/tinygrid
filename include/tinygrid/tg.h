@@ -63,6 +63,15 @@ bool tg_omr(uint8_t out[16]);
 /** The mesh-local EID. False without a dataset. */
 bool tg_mleid(uint8_t out[16]);
 
+/** The IEEE 802.15.4 extended address, in canonical order. */
+void tg_ext_addr(uint8_t out[8]);
+
+/**
+ * This node's unicast addresses, at most @p max: the off-mesh one, the ML-EID
+ * and the RLOC while attached, then the link-local one. Returns how many.
+ */
+uint8_t tg_addrs(uint8_t (*out)[16], uint8_t max);
+
 /**
  * Run whatever is due. Call after every radio event and when the time it
  * returned has passed.

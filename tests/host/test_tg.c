@@ -464,6 +464,23 @@ static void test_srp_key_reset(void)
 	CHECK(tg_plat_srp_pub(b) == 0 && memcmp(a, b, 64) != 0);
 }
 
+static void test_addrs(void)
+{
+	uint8_t a[4][16];
+
+	srp_attached();
+	tg.mlp[0] = 0xfdu;
+	tg.rloc = 0x1801u;
+	CHECK(tg_addrs(a, 4) == 4u);
+	CHECK(a[0][0] == 0xfdu && memcmp(a[0] + 8, tg.iid, 8) == 0); /* off-mesh */
+	CHECK(a[2][14] == 0x18u && a[2][15] == 0x01u);                /* RLOC */
+	CHECK(a[3][0] == 0xfeu && a[3][1] == 0x80u);                  /* link-local */
+	CHECK(tg_addrs(a, 1) == 1u);
+	tg.role = TG_DETACHED;
+	tg.have_omr = false;
+	CHECK(tg_addrs(a, 4) == 2u); /* ML-EID and link-local */
+}
+
 int main(void)
 {
 	if (psa_crypto_init() != PSA_SUCCESS) {
@@ -477,6 +494,7 @@ int main(void)
 	test_srp_removal();
 	test_srp_reset_clear();
 	test_srp_key_reset();
+	test_addrs();
 	printf("%d/%d checks passed\n", checks - fails, checks);
 	return fails ? 1 : 0;
 }
