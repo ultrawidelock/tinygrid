@@ -39,6 +39,9 @@
 
 #if !defined(CONFIG_ULTRAWIDELOCK_MATTER)
 BUILD_ASSERT(MATTER_THREAD_API == 2, "matter_thread.h changed: review this adapter");
+/* matter_thread_on_datagram(), CASE included, runs on tinygrid's thread. */
+BUILD_ASSERT(CONFIG_TINYGRID_STACK_SIZE >= CONFIG_TINYTALK_THREAD_RX_STACK_SIZE,
+	     "tinygrid's thread is smaller than CONFIG_TINYTALK_THREAD_RX_STACK_SIZE");
 #endif
 
 static K_SEM_DEFINE(s_changed, 0, 1);

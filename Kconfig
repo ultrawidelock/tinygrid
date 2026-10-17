@@ -79,9 +79,12 @@ config TINYGRID_TX_POWER
 
 config TINYGRID_STACK_SIZE
 	int "Stack of the tinygrid thread"
+	default TINYTALK_THREAD_RX_STACK_SIZE if TINYTALK
 	default 4096
 	help
-	  Matter's datagram handler runs on it.
+	  Matter's datagram handler runs on it. With tinytalk the size is
+	  CONFIG_TINYTALK_THREAD_RX_STACK_SIZE, and the adapter fails the
+	  build below it.
 
 config TINYGRID_THREAD_PRIORITY
 	int "Priority of the tinygrid thread"
