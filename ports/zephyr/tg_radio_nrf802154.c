@@ -10,6 +10,7 @@
 #include <tinygrid/tg_plat.h>
 
 #include <nrf_802154.h>
+#include <zephyr/init.h>
 
 #include <string.h>
 
@@ -121,9 +122,30 @@ void nrf_802154_transmit_failed(uint8_t *frame, nrf_802154_tx_error_t err,
 	k_sem_give(&s_tx_done);
 }
 
-int tg_zephyr_radio_init(void)
+/*
+ * The driver comes up at POST_KERNEL 80, where Zephyr's ieee802154_nrf5 puts
+ * it. Its temperature work is scheduled at POST_KERNEL
+ * CONFIG_NRF_802154_TEMPERATURE_UPDATE_INIT_PRIO and runs on the system work
+ * queue, which preempts the rest of init: a driver first started from
+ * tinygrid's APPLICATION init took a request before nrf_802154_init() and
+ * asserted (kernel panic at boot, door-lock, decawave_dwm3001cdk, 2026-10-17).
+ */
+#define RADIO_INIT_PRIO 80
+#ifdef CONFIG_NRF_802154_TEMPERATURE_UPDATE
+BUILD_ASSERT(RADIO_INIT_PRIO < CONFIG_NRF_802154_TEMPERATURE_UPDATE_INIT_PRIO,
+	     "the driver must be up before its temperature work runs");
+#endif
+
+static int radio_sys_init(void)
 {
 	nrf_802154_init();
+	return 0;
+}
+
+SYS_INIT(radio_sys_init, POST_KERNEL, RADIO_INIT_PRIO);
+
+int tg_zephyr_radio_init(void)
+{
 	nrf_802154_tx_power_set(CONFIG_TINYGRID_TX_POWER);
 	return 0;
 }
