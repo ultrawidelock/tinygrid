@@ -31,7 +31,7 @@ config TINYGRID_RADIO_OWN
 	  Drives the RADIO directly in timeslots MPSL grants, Bluetooth
 	  first, instead of linking Nordic's driver. Needs MPSL (any
 	  Bluetooth build has it) and one timeslot session:
-	  CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1. Not yet run on hardware.
+	  CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1.
 
 endchoice
 

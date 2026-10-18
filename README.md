@@ -58,5 +58,6 @@ ninja -C build/ot-sim ot-cli-ftd
 In an application, add this repository as a Zephyr module and
 `ports/zephyr/tinygrid.conf` as an extra conf file. `CONFIG_TINYGRID_POLL_MS`
 picks a sleepy child. `ports/zephyr/tinygrid-radio.conf` after it swaps
-Nordic's radio driver for tinygrid's own (nRF52, 24 to 26 KB less flash,
-not yet run on hardware).
+Nordic's radio driver for tinygrid's own (nRF52, 22 to 26 KB less flash;
+commissioned, locked and unlocked from Apple Home on a DWM3001CDK on
+2026-10-18).

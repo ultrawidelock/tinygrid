@@ -379,6 +379,7 @@ static void slot_stop(void)
 {
 	radio_off();
 	nrf_radio_int_disable(NRF_RADIO, NRF_RADIO_INT_END_MASK | NRF_RADIO_INT_DISABLED_MASK);
+	irq_disable(RADIO_IRQn); /* as MPSL had it */
 	nrfx_gppi_conn_disable(ppi_end);
 	nrf_timer_int_disable(NRF_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
 	if (tx_active) {
@@ -401,6 +402,12 @@ static void slot_start(void)
 	nrf_timer_bit_width_set(NRF_TIMER0, NRF_TIMER_BIT_WIDTH_32);
 	nrf_timer_task_trigger(NRF_TIMER0, NRF_TIMER_TASK_START);
 	radio_init();
+	/* MPSL routes the RADIO interrupt to slot() but leaves it disabled in
+	 * the NVIC between Bluetooth events; the slot's owner enables it, as
+	 * Nordic's driver does. Without this a received frame's END stays
+	 * pending and the receiver sits in RXIDLE for the rest of the slot. */
+	NVIC_ClearPendingIRQ(RADIO_IRQn);
+	irq_enable(RADIO_IRQn);
 	nrfx_gppi_conn_enable(ppi_end);
 	rearm();
 	nrf_timer_int_enable(NRF_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
