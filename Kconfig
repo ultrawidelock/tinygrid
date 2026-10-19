@@ -20,18 +20,20 @@ config TINYGRID_RADIO_NRF_802154
 	select NRF_802154_RADIO_DRIVER
 
 config TINYGRID_RADIO_OWN
-	bool "tinygrid's own, on MPSL timeslots [EXPERIMENTAL]"
+	bool "tinygrid's own, in the Bluetooth controller's gaps [EXPERIMENTAL]"
 	depends on SOC_SERIES_NRF52
 	select EXPERIMENTAL
 	select NRFX_GPPI
 	# Not "depends on MPSL": MPSL selects a Nordic driver option, so that
 	# closes a dependency loop through this choice.
-	select MPSL
+	select MPSL if !BT_LL_SW_SPLIT
+	select BT_CTLR_USER_EXT if BT_LL_SW_SPLIT
 	help
-	  Drives the RADIO directly in timeslots MPSL grants, Bluetooth
-	  first, instead of linking Nordic's driver. Needs MPSL (any
-	  Bluetooth build has it) and one timeslot session:
-	  CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1.
+	  Drives the RADIO directly in slots the Bluetooth controller lends,
+	  Bluetooth first, instead of linking Nordic's driver. Next to
+	  Nordic's SoftDevice Controller the slots are MPSL timeslots, one
+	  session (CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1); with the Zephyr
+	  controller they are events of its own scheduler.
 
 endchoice
 
@@ -108,3 +110,11 @@ config TINYGRID_MATTER_COMM_LEASE_S
 	  (ports/zephyr/thread/matter_thread_port.c).
 
 endif
+
+if BT_LL_SW_SPLIT
+
+# The Zephyr controller lends the radio through one ticker node of tinygrid's.
+config BT_CTLR_USER_TICKER_ID_RANGE
+	default 1 if TINYGRID_RADIO_OWN
+
+endif # BT_LL_SW_SPLIT

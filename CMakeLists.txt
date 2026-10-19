@@ -15,7 +15,19 @@ if(CONFIG_TINYGRID)
     ports/psa/tg_psa.c
     ports/zephyr/tg_zephyr.c)
   zephyr_library_sources_ifdef(CONFIG_TINYGRID_RADIO_NRF_802154 ports/zephyr/tg_radio_nrf802154.c)
-  zephyr_library_sources_ifdef(CONFIG_TINYGRID_RADIO_OWN ports/zephyr/tg_radio_nrf52.c src/tg_phy.c)
+  if(CONFIG_TINYGRID_RADIO_OWN)
+    zephyr_library_sources(ports/zephyr/tg_radio_nrf52.c src/tg_phy.c)
+    if(CONFIG_MPSL)
+      zephyr_library_sources(ports/zephyr/tg_slot_mpsl.c)
+    else()
+      # The Zephyr controller's scheduler: its internal headers for the slot
+      # provider, and ull_vendor.h on the global path for the controller.
+      set(ctlr ${ZEPHYR_BASE}/subsys/bluetooth/controller)
+      zephyr_library_sources(ports/zephyr/tg_slot_zll.c)
+      zephyr_library_include_directories(${ctlr} ${ctlr}/include ${ctlr}/ll_sw ${ctlr}/ll_sw/nordic)
+      zephyr_include_directories(ports/zephyr/zll)
+    endif()
+  endif()
   zephyr_library_sources_ifdef(CONFIG_TINYGRID_DNS src/tg_dns.c)
   zephyr_library_sources_ifdef(CONFIG_TINYGRID_MATTER ports/zephyr/matter_thread_tinygrid.c)
   # On nRF52 the ECB peripheral does the AES blocks, through MPSL.

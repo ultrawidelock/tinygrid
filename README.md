@@ -26,7 +26,9 @@ include/tinygrid/   tg.h (the API), tg_plat.h (what a port provides) and
 src/                the stack, portable C11: MAC, 6LoWPAN, IPv6, MLE, SRP
 ports/psa/          AES, HMAC and the SRP key on PSA Crypto
 ports/zephyr/       the radio (Nordic's nRF 802.15.4 driver, or tinygrid's
-                    own on MPSL timeslots), settings, a thread;
+                    own in the Bluetooth controller's gaps: MPSL timeslots
+                    next to Nordic's controller, the Zephyr controller's
+                    scheduler otherwise), settings, a thread;
                     matter_thread.h for tinytalk; tinygrid.conf
 ports/host/         OpenThread's simulated radio, for tests
 tests/host/         unit tests

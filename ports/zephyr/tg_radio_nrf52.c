@@ -1,25 +1,33 @@
 /* SPDX-License-Identifier: ISC */
 /*
  * tg_plat.h's radio on the nRF52 RADIO itself, in place of Nordic's 802.15.4
- * driver. The radio is borrowed from MPSL one timeslot at a time, Bluetooth
- * first: a slot is 10 ms, extended while there is work, never past 100 ms in
- * a row, and ended as soon as there is none.
+ * driver. The radio is borrowed from the Bluetooth controller one slot at a
+ * time, Bluetooth first: a slot is 10 ms, extended while there is work, never
+ * past 100 ms in a row, and ended as soon as there is none. Who lends it is
+ * tg_slot.h's business: MPSL next to Nordic's controller, or the Zephyr
+ * controller's own scheduler.
  *
- * Contexts. MPSL calls slot() from its RADIO and TIMER0 interrupts at the
- * zero-latency priority, where no kernel call is allowed; poke_isr() runs at
- * that priority too, so nothing in this file preempts anything else in it.
- * The stack's thread hands over requests through the req_ variables and a
+ * Contexts. The provider calls in from the RADIO and slot timer interrupts at
+ * the controller's radio priority, where no kernel call is allowed; poke_isr()
+ * runs at that priority too, so nothing in this file preempts anything else in
+ * it. The stack's thread hands over requests through the req_ variables and a
  * poke; the slot hands back frames through a ring and a transmit result, and
- * wakes the thread from a kernel-aware interrupt. MPSL's low-priority
- * signals (blocked, idle) run on its work queue with its lock held, which is
- * where a slot is requested again.
+ * wakes the thread from a kernel-aware interrupt.
  *
- * Inside a slot TIMER0 counts microseconds from its start, one job a channel:
+ * The radio ends every operation DISABLED, and that one interrupt drives the
+ * whole machine: a received frame disables the receiver (END_DISABLE), an
+ * acknowledgement or a frame of ours ends with PHYEND_DISABLE, a busy channel
+ * with CCABUSY_DISABLE. The Zephyr controller's radio interrupt hands over on
+ * nothing else.
+ *
+ * Inside a slot TG_SLOT_TIMER counts microseconds from its start, one job a
+ * channel:
  *   CC0  the one interrupt: the slot's guard, a backoff or ACK wait, a poke
  *   CC1  TXEN for an ACK, by PPI, 192 us after the frame it answers
  *   CC2  captured at every RADIO END, by PPI
  *   CC3  captured by now()
  */
+#include "tg_slot.h"
 #include "tg_zephyr_int.h"
 
 #include <tinygrid/tg_phy.h>
@@ -28,15 +36,11 @@
 #include <hal/nrf_radio.h>
 #include <hal/nrf_timer.h>
 #include <helpers/nrfx_gppi.h>
-#include <mpsl_timeslot.h>
-#include <multithreading_lock.h>
 #include <zephyr/irq.h>
 
 #include <string.h>
 
-BUILD_ASSERT(CONFIG_MPSL_TIMESLOT_SESSION_COUNT >= 1, "set CONFIG_MPSL_TIMESLOT_SESSION_COUNT=1");
-
-#define SLOT_US 10000u
+#define SLOT_US TG_SLOT_US
 #define SLOTS_MAX 10u /* then end, so a waiting flash write gets its turn */
 #define GUARD_US 300u /* extend this long before the end; MPSL needs 87 us */
 #define TX_RAMP_US 40u
@@ -81,22 +85,14 @@ static uint8_t s_ack[1 + 3];        /* PHR and our ACK */
 static uint8_t s_spare[1 + 127];    /* ACKs we wait for; frames with no room */
 static nrfx_gppi_handle_t ppi_end, ppi_ack;
 
-static atomic_t s_sess; /* a slot is requested or running */
-static mpsl_timeslot_session_id_t sid;
-static mpsl_timeslot_signal_return_param_t ret;
-static mpsl_timeslot_request_t s_req = {
-	.request_type = MPSL_TIMESLOT_REQ_TYPE_EARLIEST,
-	.params.earliest = {
-		.hfclk = MPSL_TIMESLOT_HFCLK_CFG_XTAL_GUARANTEED,
-		.priority = MPSL_TIMESLOT_PRIORITY_NORMAL,
-		.length_us = SLOT_US,
-		.timeout_us = MPSL_TIMESLOT_EARLIEST_TIMEOUT_MAX_US,
-	},
-};
-
 static bool want(void)
 {
 	return req_rx || req_tx || tx_active;
+}
+
+bool tg_radio_wants_slot(void)
+{
+	return want();
 }
 
 static void wake(void)
@@ -114,8 +110,8 @@ static uint32_t rand32(void)
 
 static uint32_t now(void)
 {
-	nrf_timer_task_trigger(NRF_TIMER0, NRF_TIMER_TASK_CAPTURE3);
-	return nrf_timer_cc_get(NRF_TIMER0, NRF_TIMER_CC_CHANNEL3);
+	nrf_timer_task_trigger(TG_SLOT_TIMER, NRF_TIMER_TASK_CAPTURE3);
+	return nrf_timer_cc_get(TG_SLOT_TIMER, NRF_TIMER_CC_CHANNEL3);
 }
 
 /* CC0 to the earliest of the guard, the operation's deadline and a poke. */
@@ -126,8 +122,8 @@ static void rearm(void)
 	if (poked || (int32_t)(at - t) < 5) {
 		at = t + 5u;
 	}
-	nrf_timer_event_clear(NRF_TIMER0, NRF_TIMER_EVENT_COMPARE0);
-	nrf_timer_cc_set(NRF_TIMER0, NRF_TIMER_CC_CHANNEL0, at);
+	nrf_timer_event_clear(TG_SLOT_TIMER, NRF_TIMER_EVENT_COMPARE0);
+	nrf_timer_cc_set(TG_SLOT_TIMER, NRF_TIMER_CC_CHANNEL0, at);
 }
 
 /* slot_guard() in a few microseconds: requests changed, or the work ran out. */
@@ -165,7 +161,9 @@ static void radio_init(void)
 	nrf_radio_cca_configure(NRF_RADIO, NRF_RADIO_CCA_MODE_ED, CCA_ED, 0x14, 2);
 	nrf_radio_frequency_set(NRF_RADIO, (uint16_t)(2405u + 5u * (chan - 11u)));
 	nrf_radio_txpower_set(NRF_RADIO, (nrf_radio_txpower_t)(uint8_t)CONFIG_TINYGRID_TX_POWER);
-	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK | NRF_RADIO_INT_DISABLED_MASK);
+	/* The one interrupt, and the one the Zephyr controller keeps enabled
+	 * between its own events. */
+	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_DISABLED_MASK);
 }
 
 /* To DISABLED, at once: receive ramps down in no time, transmit in 6 us. */
@@ -190,12 +188,13 @@ static void rx_arm(void)
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_ADDRESS);
 }
 
-/* Listen, from DISABLED. */
+/* Listen, from DISABLED; a frame leaves the radio DISABLED again. */
 static void rx_start(void)
 {
 	rx_arm();
 	nrf_radio_shorts_set(NRF_RADIO, NRF_RADIO_SHORT_RXREADY_START_MASK |
-						NRF_RADIO_SHORT_ADDRESS_RSSISTART_MASK);
+						NRF_RADIO_SHORT_ADDRESS_RSSISTART_MASK |
+						NRF_RADIO_SHORT_END_DISABLE_MASK);
 	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_RXEN);
 	op = OP_RX;
 }
@@ -274,7 +273,8 @@ static void tx_disabled(void)
 	} else if (s_tx[1] & 0x20u) { /* ACK requested */
 		nrf_radio_packetptr_set(NRF_RADIO, s_spare);
 		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
-		nrf_radio_shorts_set(NRF_RADIO, NRF_RADIO_SHORT_RXREADY_START_MASK);
+		nrf_radio_shorts_set(NRF_RADIO, NRF_RADIO_SHORT_RXREADY_START_MASK |
+							NRF_RADIO_SHORT_END_DISABLE_MASK);
 		nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_RXEN);
 		op = OP_ACK_WAIT;
 		op_timer(TX_RAMP_US + TG_PHY_ACK_WAIT_US);
@@ -283,6 +283,7 @@ static void tx_disabled(void)
 	}
 }
 
+/* DISABLED after a frame while waiting for the ACK. */
 static void ack_wait_end(void)
 {
 	bool pending;
@@ -292,7 +293,8 @@ static void ack_wait_end(void)
 		radio_off();
 		tx_done(TG_TX_OK, pending);
 	} else {
-		nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_START); /* not it: wait on */
+		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
+		nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_RXEN); /* not it: wait on */
 	}
 }
 
@@ -306,9 +308,10 @@ static void tx_begin(void)
 
 /* ---- receive ----------------------------------------------------------- */
 
+/* DISABLED after a frame: the receiver is off until told otherwise. */
 static void rx_end(void)
 {
-	uint32_t t = nrf_timer_cc_get(NRF_TIMER0, NRF_TIMER_CC_CHANNEL2); /* END, by PPI */
+	uint32_t t = nrf_timer_cc_get(TG_SLOT_TIMER, NRF_TIMER_CC_CHANNEL2); /* END, by PPI */
 	uint8_t *b = s_cur, n = b[0];
 	int keep = TG_PHY_DROP;
 
@@ -317,15 +320,15 @@ static void rx_end(void)
 	if (b != s_spare && nrf_radio_crc_status_check(NRF_RADIO) && n >= 5u && n <= 127u) {
 		keep = tg_phy_filter(&addr, b + 1, (uint8_t)(n - 2u));
 	}
+	op = OP_OFF;
 	if (keep == TG_PHY_ACK) {
-		radio_off();
 		s_ack[0] = 5; /* 3 B and the FCS */
 		tg_phy_ack(s_ack + 1, b[3]);
 		nrf_radio_packetptr_set(NRF_RADIO, s_ack);
 		nrf_radio_shorts_set(NRF_RADIO, NRF_RADIO_SHORT_TXREADY_START_MASK |
 							NRF_RADIO_SHORT_PHYEND_DISABLE_MASK);
-		nrf_timer_event_clear(NRF_TIMER0, NRF_TIMER_EVENT_COMPARE1);
-		nrf_timer_cc_set(NRF_TIMER0, NRF_TIMER_CC_CHANNEL1, t + ACK_AT_US);
+		nrf_timer_event_clear(TG_SLOT_TIMER, NRF_TIMER_EVENT_COMPARE1);
+		nrf_timer_cc_set(TG_SLOT_TIMER, NRF_TIMER_CC_CHANNEL1, t + ACK_AT_US);
 		nrfx_gppi_conn_enable(ppi_ack);
 		op = OP_ACK;
 		if ((int32_t)(t + ACK_AT_US - now()) < 2) {
@@ -338,11 +341,8 @@ static void rx_end(void)
 		s_rx_tail++;
 		wake();
 	}
-	if (op == OP_RX) {
-		rx_arm();
-		nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_START);
-	} else if (op == OP_OFF) {
-		idle();
+	if (op == OP_OFF) {
+		idle(); /* listen on */
 	}
 }
 
@@ -375,43 +375,49 @@ static void apply(void)
 	}
 }
 
-static void slot_stop(void)
+/* Our side of a slot ending, whoever ends it. */
+static void slot_release(void)
 {
 	radio_off();
-	nrf_radio_int_disable(NRF_RADIO, NRF_RADIO_INT_END_MASK | NRF_RADIO_INT_DISABLED_MASK);
-	irq_disable(RADIO_IRQn); /* as MPSL had it */
 	nrfx_gppi_conn_disable(ppi_end);
-	nrf_timer_int_disable(NRF_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
+	nrf_timer_int_disable(TG_SLOT_TIMER, NRF_TIMER_INT_COMPARE0_MASK);
 	if (tx_active) {
 		tx_active = false; /* starts over in the next slot */
 		req_tx = true;
 	}
 	backoff = op_armed = in_slot = false;
-	ret.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_END;
 }
 
-static void slot_start(void)
+static void slot_stop(void)
+{
+	slot_release();
+	tg_slot_end();
+}
+
+void tg_radio_slot_stop(void)
+{
+	slot_release();
+}
+
+void tg_radio_slot_start(void)
 {
 	in_slot = true;
 	slots = 1;
 	guard_at = SLOT_US - GUARD_US;
 	op_armed = poked = false;
 	op = OP_OFF;
-	/* MPSL starts it from zero at 1 MHz; 32 bits so 100 ms cannot wrap. */
-	nrf_timer_task_trigger(NRF_TIMER0, NRF_TIMER_TASK_STOP);
-	nrf_timer_bit_width_set(NRF_TIMER0, NRF_TIMER_BIT_WIDTH_32);
-	nrf_timer_task_trigger(NRF_TIMER0, NRF_TIMER_TASK_START);
 	radio_init();
-	/* MPSL routes the RADIO interrupt to slot() but leaves it disabled in
-	 * the NVIC between Bluetooth events; the slot's owner enables it, as
-	 * Nordic's driver does. Without this a received frame's END stays
-	 * pending and the receiver sits in RXIDLE for the rest of the slot. */
-	NVIC_ClearPendingIRQ(RADIO_IRQn);
-	irq_enable(RADIO_IRQn);
 	nrfx_gppi_conn_enable(ppi_end);
 	rearm();
-	nrf_timer_int_enable(NRF_TIMER0, NRF_TIMER_INT_COMPARE0_MASK);
+	nrf_timer_int_enable(TG_SLOT_TIMER, NRF_TIMER_INT_COMPARE0_MASK);
 	apply();
+}
+
+void tg_radio_slot_extended(uint32_t us)
+{
+	slots++;
+	guard_at += us;
+	rearm();
 }
 
 static void slot_guard(void)
@@ -422,19 +428,18 @@ static void slot_guard(void)
 	} else if ((int32_t)(guard_at - now()) > 0) {
 		rearm();
 	} else if (slots < SLOTS_MAX) {
-		ret.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_EXTEND;
-		ret.params.extend.length_us = SLOT_US;
+		tg_slot_extend(SLOT_US);
 	} else {
-		slot_stop(); /* SESSION_IDLE asks for the next one */
+		slot_stop(); /* the provider asks for the next one */
 	}
 }
 
-static void timer_irq(void)
+void tg_radio_timer_irq(void)
 {
-	if (!nrf_timer_event_check(NRF_TIMER0, NRF_TIMER_EVENT_COMPARE0)) {
+	if (!nrf_timer_event_check(TG_SLOT_TIMER, NRF_TIMER_EVENT_COMPARE0)) {
 		return;
 	}
-	nrf_timer_event_clear(NRF_TIMER0, NRF_TIMER_EVENT_COMPARE0);
+	nrf_timer_event_clear(TG_SLOT_TIMER, NRF_TIMER_EVENT_COMPARE0);
 	if (op_armed && (int32_t)(now() - op_at) >= 0) {
 		op_armed = false;
 		if (backoff) {
@@ -448,68 +453,28 @@ static void timer_irq(void)
 	slot_guard();
 }
 
-static void radio_irq(void)
+void tg_radio_irq(void)
 {
-	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
-		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
-		if (op == OP_RX) {
-			rx_end();
-		} else if (op == OP_ACK_WAIT) {
-			ack_wait_end();
-		}
+	if (!nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
+		return;
 	}
-	if (nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_DISABLED)) {
-		nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
-		if (op == OP_TX) {
-			tx_disabled();
-		} else if (op == OP_ACK) {
-			ack_sent();
-		}
-	}
-}
-
-static void request(void)
-{
-	if (want() && atomic_cas(&s_sess, 0, 1) && mpsl_timeslot_request(sid, &s_req) != 0) {
-		atomic_set(&s_sess, 0);
-	}
-}
-
-static mpsl_timeslot_signal_return_param_t *slot(mpsl_timeslot_session_id_t id, uint32_t signal)
-{
-	ARG_UNUSED(id);
-	ret.callback_action = MPSL_TIMESLOT_SIGNAL_ACTION_NONE;
-	switch (signal) {
-	case MPSL_TIMESLOT_SIGNAL_START:
-		slot_start();
+	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
+	switch (op) {
+	case OP_RX:
+		rx_end();
 		break;
-	case MPSL_TIMESLOT_SIGNAL_RADIO:
-		radio_irq();
+	case OP_ACK_WAIT:
+		ack_wait_end();
 		break;
-	case MPSL_TIMESLOT_SIGNAL_TIMER0:
-		timer_irq();
+	case OP_TX:
+		tx_disabled();
 		break;
-	case MPSL_TIMESLOT_SIGNAL_EXTEND_SUCCEEDED:
-		slots++;
-		guard_at += SLOT_US;
-		rearm();
+	case OP_ACK:
+		ack_sent();
 		break;
-	case MPSL_TIMESLOT_SIGNAL_EXTEND_FAILED:
-		slot_stop();
-		break;
-	/* The rest come on MPSL's work queue, its lock held. */
-	case MPSL_TIMESLOT_SIGNAL_BLOCKED:
-	case MPSL_TIMESLOT_SIGNAL_CANCELLED:
-		(void)mpsl_timeslot_request(sid, &s_req);
-		return NULL;
-	case MPSL_TIMESLOT_SIGNAL_SESSION_IDLE:
-		atomic_set(&s_sess, 0);
-		request();
-		return NULL;
 	default:
-		return NULL;
+		break;
 	}
-	return &ret;
 }
 
 /* ---- the thread's side ------------------------------------------------- */
@@ -536,12 +501,10 @@ static void wake_isr(const void *arg)
 /* A slot if none is coming, else a word with the one there is. */
 static void kick(void)
 {
-	if (atomic_get(&s_sess)) {
+	if (tg_slot_pending()) {
 		NVIC_SetPendingIRQ(POKE_IRQ);
 	} else if (want()) {
-		(void)MULTITHREADING_LOCK_ACQUIRE();
-		request();
-		MULTITHREADING_LOCK_RELEASE();
+		tg_slot_request();
 	}
 }
 
@@ -587,14 +550,12 @@ void tg_zephyr_radio_poll(void)
 
 int tg_zephyr_radio_init(void)
 {
-	int err;
-
 	tg_plat_random(&rnd, sizeof(rnd));
 	rnd |= 1u;
 	if (nrfx_gppi_conn_alloc(nrf_radio_event_address_get(NRF_RADIO, NRF_RADIO_EVENT_END),
-				 nrf_timer_task_address_get(NRF_TIMER0, NRF_TIMER_TASK_CAPTURE2),
+				 nrf_timer_task_address_get(TG_SLOT_TIMER, NRF_TIMER_TASK_CAPTURE2),
 				 &ppi_end) != 0 ||
-	    nrfx_gppi_conn_alloc(nrf_timer_event_address_get(NRF_TIMER0, NRF_TIMER_EVENT_COMPARE1),
+	    nrfx_gppi_conn_alloc(nrf_timer_event_address_get(TG_SLOT_TIMER, NRF_TIMER_EVENT_COMPARE1),
 				 nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_TXEN),
 				 &ppi_ack) != 0) {
 		return -EIO;
@@ -603,8 +564,5 @@ int tg_zephyr_radio_init(void)
 	irq_enable(POKE_IRQ);
 	IRQ_CONNECT(WAKE_IRQ, WAKE_PRIO, wake_isr, NULL, 0);
 	irq_enable(WAKE_IRQ);
-	(void)MULTITHREADING_LOCK_ACQUIRE();
-	err = mpsl_timeslot_session_open(slot, &sid);
-	MULTITHREADING_LOCK_RELEASE();
-	return err == 0 ? 0 : -EIO;
+	return tg_slot_init();
 }
