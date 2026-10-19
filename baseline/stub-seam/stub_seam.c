@@ -62,3 +62,17 @@ int matter_thread_send_to(const struct matter_thread_peer *peer, const uint8_t *
 	return s_ret;
 }
 void matter_thread_advertise_reset(void) { s_ret = s_ret; }
+
+int matter_thread_interface(struct matter_thread_iface *out)
+{
+	memset(out, 0, sizeof(*out));
+	return s_ret;
+}
+
+int matter_thread_scan(struct matter_thread_scan_result *out, uint8_t cap, uint8_t *n)
+{
+	(void)out;
+	(void)cap;
+	*n = 0u;
+	return s_ret;
+}
