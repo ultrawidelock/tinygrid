@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_plat.h's radio on the nRF52 RADIO itself, in place of Nordic's 802.15.4
  * driver. The radio is borrowed from the Bluetooth controller one slot at a

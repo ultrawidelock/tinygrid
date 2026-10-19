@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The logic half of an 802.15.4 radio for a Thread 1.1 child. It keeps what
  * tg_mac.c would keep (data and command frames with both addresses, no IEs)

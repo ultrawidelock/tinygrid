@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * IEEE 802.15.4 framing for a Thread child: 2006 frames, security level 5 with
  * key id mode 1, each built, secured and sent before the next, and the data

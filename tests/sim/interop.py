@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: ISC
+# SPDX-License-Identifier: Apache-2.0
 """tinygrid against OpenThread, on OpenThread's simulated radio.
 
 An ot-cli-ftd leader forms a network with an SRP server and an off-mesh

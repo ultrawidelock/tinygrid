@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file matter_thread_tinygrid.c — matter_thread.h on tinygrid, for tinytalk
  * and for ultrawidelock (whose seam adds resolve and a dataset dump).

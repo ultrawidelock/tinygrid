@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * 6LoWPAN for a Thread child: RFC 6282 IPHC and UDP NHC both ways, the RFC
  * 4944 mesh header skipped on receive, and one reassembly at a time.

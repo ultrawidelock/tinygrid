@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * DNS-SD resolution of one service instance: an SRV query to the server the
  * network data names (the SRP server's address, port 53, as OpenThread's

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The slot provider under tg_radio_nrf52.c: who lends the RADIO, and for how
  * long. Two of them: MPSL timeslots next to Nordic's SoftDevice Controller

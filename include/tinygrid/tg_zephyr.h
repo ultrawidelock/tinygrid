@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* tinygrid on Zephyr: the lock every caller outside the stack's thread takes. */
 #pragma once
 

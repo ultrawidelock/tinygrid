@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_plat.h on Zephyr, minus the radio: time, settings, the lock and the one
  * thread that runs the stack. No OpenThread, no IEEE 802.15.4 L2, no network

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * AES-CCM* as Thread uses it: 13-byte nonce, 2-byte length field and a 4-byte
  * tag (security level 5, ENC-MIC-32) for both MAC frames and MLE messages.

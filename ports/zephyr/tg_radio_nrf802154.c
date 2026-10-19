@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_plat.h's radio on Nordic's nRF 802.15.4 driver, which shares the radio
  * with Bluetooth through MPSL on its own. Driver callouts only queue:

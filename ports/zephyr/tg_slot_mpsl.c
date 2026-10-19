@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_slot.h on MPSL timeslots, next to Nordic's SoftDevice Controller. One
  * session asks for the earliest 10 ms slot, Bluetooth first. MPSL calls slot()

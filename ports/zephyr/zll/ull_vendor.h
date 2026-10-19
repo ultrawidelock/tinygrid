@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The Zephyr Bluetooth controller's vendor hooks, which it includes under
  * CONFIG_BT_CTLR_USER_EXT. tinygrid's radio turns that on for a ticker node of

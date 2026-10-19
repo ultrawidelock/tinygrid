@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* Host port: a tinygrid node on OpenThread's simulated radio. */
 #pragma once
 

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * SRP client (draft-ietf-dnssd-srp): one DNS Update carries the host, its
  * off-mesh address, its key and every service, signed with SIG(0). The

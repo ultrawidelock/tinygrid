@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file tg.h — tinygrid: a Thread end device that never routes.
  *

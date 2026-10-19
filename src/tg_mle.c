@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * MLE for a child: attach (Parent Request, Parent Response, Child ID Request,
  * Child ID Response), keep-alive and address registration (Child Update),

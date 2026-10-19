@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file tg_plat.h — what a port provides to tinygrid, and the radio event
  * it feeds back in.

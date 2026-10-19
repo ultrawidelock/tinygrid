@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_plat_aes() on the ECB peripheral, through the MPSL call the Bluetooth
  * controller links anyway: no key import and no PSA call per block, which

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * The stack's state, its deadlines, the dataset, keys and the persisted
  * counters.

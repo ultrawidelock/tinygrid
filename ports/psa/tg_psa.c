@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_plat.h's crypto on PSA Crypto: AES-ECB, HMAC-SHA-256 and the SRP host
  * key, all through calls a Matter node links anyway. HMAC is built on the

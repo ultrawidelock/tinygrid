@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_slot.h on the Zephyr Bluetooth controller: tinygrid's radio is one more
  * event in the controller's own scheduler, with a ticker node of its own

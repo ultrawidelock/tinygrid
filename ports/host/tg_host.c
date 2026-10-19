@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Host port: time, files for persistence, and a radio that speaks
  * OpenThread's simulation protocol, so a tinygrid node can join a network of

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* tinygrid internals: the one state struct and the calls between layers. */
 #pragma once
 

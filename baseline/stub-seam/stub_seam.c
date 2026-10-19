@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * matter_thread.h answered by nothing, for size measurement only. Every result
  * comes from a volatile so link-time optimisation cannot fold the callers'

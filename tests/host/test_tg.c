@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Host unit tests: Thread key derivation and MLE encryption against the
  * Thread specification's vectors (as OpenThread's thread-cert test_crypto.py

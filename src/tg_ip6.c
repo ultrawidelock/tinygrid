@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: ISC */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * IPv6 for a child: its handful of addresses, UDP in and out, and an echo
  * reply. Every unicast leaves through the parent; only MLE goes link-local.

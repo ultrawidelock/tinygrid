@@ -63,3 +63,7 @@ picks a sleepy child. `ports/zephyr/tinygrid-radio.conf` after it swaps
 Nordic's radio driver for tinygrid's own (nRF52, 22 to 26 KB less flash;
 commissioned, locked and unlocked from Apple Home on a DWM3001CDK on
 2026-10-18).
+
+## License
+
+Apache-2.0, see LICENSE and NOTICE.
