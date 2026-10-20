@@ -180,7 +180,7 @@ bool tg_srp_pending(void);
  * registers under a new one. Call once tg_srp_reset(true) is answered: a
  * server keeps a name bound to its key until the key lease runs out. An
  * application that wipes the settings store on a factory reset, as the
- * door-lock does (tinytalk b37d675), loses the key with it and need not.
+ * door-lock does (tinytalk 41f6b2f), loses the key with it and need not.
  */
 void tg_srp_key_reset(void);
 
