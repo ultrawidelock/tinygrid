@@ -9,7 +9,7 @@ address, UDP up to 1,280 B, realm-local multicast, ping, SRP, DNS-SD.
 **Does not** route, lead, join, commission, CSL, link metrics. Claims Thread
 1.1.
 
-19,721 B flash, 10,148 B RAM, LTO release build, with its own radio driver
+19.3 KB flash, 9.9 KB RAM, LTO release build, with its own radio driver
 in place of Nordic's.
 
 ## Use
