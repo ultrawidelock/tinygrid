@@ -250,7 +250,7 @@ static struct {
  * The window record, kept in tg/3 from the moment it is registered until the
  * window closes. Apple's border router keeps a commissionable record its node
  * never removed well past its lease, and removing the host does not take it
- * (tinytalk edd63a5, 2026-10-16): a crash, power cut or reset with a window
+ * (tinytalk 74ef5d2, 2026-10-16): a crash, power cut or reset with a window
  * open leaves one that Home dials over Thread instead of using BLE. So the
  * next boot registers that name again and removes it.
  */
@@ -480,7 +480,7 @@ int matter_thread_unadvertise_commissionable(void)
  * nothing on the border router should keep vouching for them. The host goes
  * with a key lease of 0, so the server forgets its key; the key itself stays
  * in tg/2. The door-lock wipes the settings store on a factory reset
- * (tinytalk 41f6b2f), which takes it; an application that does not calls
+ * (tinytalk 0fc9948), which takes it; an application that does not calls
  * tg_srp_key_reset() once this is answered.
  */
 void matter_thread_advertise_reset(void)
