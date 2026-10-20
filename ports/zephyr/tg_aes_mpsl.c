@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_plat_aes() on the ECB peripheral, through the MPSL call the Bluetooth

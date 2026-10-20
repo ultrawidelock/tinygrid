@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Aseem Chopra
+# SPDX-License-Identifier: Apache-2.0
+
 # Measurement scaffolding only: matter_thread.h with no Thread stack behind it,
 # so a build with CONFIG_OPENTHREAD=n shows what the image costs without one.
 # Only where tinytalk is: sysbuild hands every module to MCUboot as well.

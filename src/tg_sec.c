@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * AES-CCM* as Thread uses it: 13-byte nonce, 2-byte length field and a 4-byte

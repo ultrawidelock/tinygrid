@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_plat.h's crypto on PSA Crypto: AES-ECB, HMAC-SHA-256 and the SRP host

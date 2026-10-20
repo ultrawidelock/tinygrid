@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Between tg_zephyr.c, which runs the stack, and the radio port under it. */
 #pragma once

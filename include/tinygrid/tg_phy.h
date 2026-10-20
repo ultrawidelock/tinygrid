@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /**
  * @file tg_phy.h — what an 802.15.4 radio decides rather than does: which

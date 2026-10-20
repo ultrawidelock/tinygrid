@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 Aseem Chopra
 # SPDX-License-Identifier: Apache-2.0
 # tinygrid as a Zephyr module: the portable core, PSA crypto, a radio port
 # (Nordic's driver or tinygrid's own) and, for tinytalk, matter_thread.h.

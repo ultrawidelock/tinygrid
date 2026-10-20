@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_plat.h's radio on Nordic's nRF 802.15.4 driver, which shares the radio

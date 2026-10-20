@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * tg_slot.h on the Zephyr Bluetooth controller: tinygrid's radio is one more

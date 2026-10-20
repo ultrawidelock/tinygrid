@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * 6LoWPAN for a Thread child: RFC 6282 IPHC and UDP NHC both ways, the RFC

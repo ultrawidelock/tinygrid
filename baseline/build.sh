@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Aseem Chopra
 # SPDX-License-Identifier: Apache-2.0
 # Pristine build of tinytalk's door-lock sample on the DWM3001CDK with
 # release.conf and no-lto.conf, plus the named overlays from this directory

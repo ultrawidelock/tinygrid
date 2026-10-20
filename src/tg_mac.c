@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 Aseem Chopra */
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * IEEE 802.15.4 framing for a Thread child: 2006 frames, security level 5 with
