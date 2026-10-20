@@ -399,11 +399,11 @@ void tg_radio_slot_stop(void)
 	slot_release();
 }
 
-void tg_radio_slot_start(void)
+void tg_radio_slot_start(uint32_t us)
 {
 	in_slot = true;
 	slots = 1;
-	guard_at = SLOT_US - GUARD_US;
+	guard_at = us > 2u * GUARD_US ? us - GUARD_US : GUARD_US;
 	op_armed = poked = false;
 	op = OP_OFF;
 	radio_init();

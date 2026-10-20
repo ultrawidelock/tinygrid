@@ -11,13 +11,16 @@
  * Bluetooth event falling due while a slot runs preempts it: is_abort_cb()
  * yields, abort_cb() stops the radio and the slot ends through the slot timer,
  * never from under the caller that aborted it. The flash driver's radio sync
- * aborts a slot the same way.
+ * aborts a slot the same way, with no Bluetooth event behind it; the next
+ * slot then waits out a flash operation's window rather than start inside it.
  *
  * Contexts. The ticker fires at the controller's ULL_HIGH priority; prepare()
  * and everything after it run at its radio (LLL) priority, where no kernel
  * call is allowed. The RADIO interrupt is the controller's, which hands over
  * on DISABLED and nothing else; the slot timer is TIMER2, with its interrupt
- * at the same priority.
+ * at the same priority. Ticker starts from the radio priority go through
+ * ULL_HIGH: the ticker job runs there, and an operation landing from above
+ * it while the job runs can be lost.
  */
 #include "tg_slot.h"
 
@@ -46,9 +49,12 @@
 #define FIRST_US (EVENT_OVERHEAD_XTAL_US + 100u) /* the crystal, after a quiet spell */
 #define GAP_US 500u                              /* between two slots of ours */
 #define RETRY_US 2000u                           /* a Bluetooth event was running */
+#define FLASH_US 10000u                          /* aborted for no Bluetooth event: a flash write */
 #define ABORT_US 20u                             /* from abort_cb() to the slot's end */
 
 static void prepare(void *param);
+static void ticker_cb(uint32_t ticks_at_expire, uint32_t ticks_drift, uint32_t remainder,
+		      uint16_t lazy, uint8_t force, void *ctx);
 
 /* The controller's view of this event: an upper half it counts prepares on,
  * and a lower half that points back at it. */
@@ -60,14 +66,55 @@ static struct lll_prepare_param s_prep;
 static memq_link_t s_link;
 static struct mayfly s_mfy = {0, 0, &s_link, &s_prep, prepare};
 
-static atomic_t s_sess; /* a slot is requested or running */
-static bool s_hf;       /* the HF clock is ours until the work runs out */
-static bool s_aborting; /* the timer's next compare ends an aborted slot */
+static atomic_t s_sess;            /* a slot is requested or running */
+static bool s_hf;                  /* the HF clock is ours until the work runs out */
+static bool s_aborting;            /* the timer's next compare ends an aborted slot */
+static uint32_t s_gap_us = GAP_US; /* before the next slot: longer after a flash abort */
+
+/* Counters, for a debugger: ticker fired, started, a Bluetooth event was
+ * running, ended, aborted for a Bluetooth event, aborted for anything else. */
+uint32_t tg_slot_stats[6];
 
 static void op_cb(uint32_t status, void *ctx)
 {
 	ARG_UNUSED(ctx);
 	LL_ASSERT(status == TICKER_STATUS_SUCCESS);
+}
+
+static void arm_start(uint8_t user, uint32_t us)
+{
+	uint32_t ret;
+
+	ret = ticker_start(TICKER_INSTANCE_ID_CTLR, user, TICKER_ID_USER_BASE,
+			   ticker_ticks_now_get(), HAL_TICKER_US_TO_TICKS(us), TICKER_NULL_PERIOD,
+			   TICKER_NULL_REMAINDER, TICKER_NULL_LAZY, TICKER_NULL_SLOT, ticker_cb, NULL,
+			   op_cb, NULL);
+	LL_ASSERT(ret == TICKER_STATUS_SUCCESS || ret == TICKER_STATUS_BUSY);
+}
+
+static uint32_t s_arm_us;
+
+static void arm_ull(void *param)
+{
+	ARG_UNUSED(param);
+	arm_start(TICKER_USER_ID_ULL_HIGH, s_arm_us);
+}
+
+static memq_link_t s_link_arm;
+static struct mayfly s_mfy_arm = {0, 0, &s_link_arm, NULL, arm_ull};
+
+/* The slot's ticker, @p us from now, from ticker user @p user. */
+static void arm(uint8_t user, uint32_t us)
+{
+	if (user == TICKER_USER_ID_LLL) {
+		uint32_t ret;
+
+		s_arm_us = us;
+		ret = mayfly_enqueue(TICKER_USER_ID_LLL, TICKER_USER_ID_ULL_HIGH, 0, &s_mfy_arm);
+		LL_ASSERT(!ret);
+		return;
+	}
+	arm_start(user, us);
 }
 
 static void ticker_cb(uint32_t ticks_at_expire, uint32_t ticks_drift, uint32_t remainder,
@@ -77,6 +124,7 @@ static void ticker_cb(uint32_t ticks_at_expire, uint32_t ticks_drift, uint32_t r
 
 	ARG_UNUSED(ticks_drift);
 	ARG_UNUSED(ctx);
+	tg_slot_stats[0]++;
 	s_ull.ref++;
 	s_prep.ticks_at_expire = ticks_at_expire;
 	s_prep.remainder = remainder;
@@ -88,30 +136,21 @@ static void ticker_cb(uint32_t ticks_at_expire, uint32_t ticks_drift, uint32_t r
 	LL_ASSERT(!ret);
 }
 
-/* The slot's ticker, @p us from now, from ticker user @p user. */
-static void arm(uint8_t user, uint32_t us)
-{
-	uint32_t ret;
-
-	ret = ticker_start(TICKER_INSTANCE_ID_CTLR, user, TICKER_ID_USER_BASE,
-			   ticker_ticks_now_get(), HAL_TICKER_US_TO_TICKS(us), TICKER_NULL_PERIOD,
-			   TICKER_NULL_REMAINDER, TICKER_NULL_LAZY, TICKER_NULL_SLOT, ticker_cb, NULL,
-			   op_cb, NULL);
-	LL_ASSERT(ret == TICKER_STATUS_SUCCESS || ret == TICKER_STATUS_BUSY);
-}
-
 /* A slot, if the radio wants one and none is on the way. */
 static bool request(uint8_t user)
 {
+	uint32_t gap = s_gap_us;
+
 	if (!tg_radio_wants_slot() || !atomic_cas(&s_sess, 0, 1)) {
 		return false;
 	}
+	s_gap_us = GAP_US;
 	if (!s_hf) {
 		s_hf = true;
 		(void)lll_hfclock_on();
-		arm(user, FIRST_US);
+		arm(user, FIRST_US > gap ? FIRST_US : gap);
 	} else {
-		arm(user, GAP_US);
+		arm(user, gap);
 	}
 	return true;
 }
@@ -135,6 +174,7 @@ static void done(void)
 {
 	struct event_done_extra *e;
 
+	tg_slot_stats[3]++;
 	radio_isr_set(isr_none, NULL);
 	nrf_timer_task_trigger(TG_SLOT_TIMER, NRF_TIMER_TASK_STOP);
 	e = ull_event_done_extra_get();
@@ -172,7 +212,7 @@ static int prepare_cb(struct lll_prepare_param *p)
 	nrf_timer_prescaler_set(TG_SLOT_TIMER, NRF_TIMER_FREQ_1MHz);
 	nrf_timer_task_trigger(TG_SLOT_TIMER, NRF_TIMER_TASK_CLEAR);
 	nrf_timer_task_trigger(TG_SLOT_TIMER, NRF_TIMER_TASK_START);
-	tg_radio_slot_start();
+	tg_radio_slot_start(TG_SLOT_US);
 	return 0;
 }
 
@@ -193,8 +233,17 @@ static void abort_cb(struct lll_prepare_param *p, void *param)
 		arm(TICKER_USER_ID_LLL, RETRY_US);
 		return;
 	}
-	/* The controller takes the radio now. The done goes out from the
-	 * timer's interrupt, once the caller is off the pipeline. */
+	/* The controller takes the radio now. A Bluetooth event waiting in
+	 * the pipeline is what preempted us; nothing there means the flash
+	 * driver's radio sync, whose window the next slot should wait out.
+	 * The done goes out from the timer's interrupt, once the caller is
+	 * off the pipeline. */
+	if (ull_prepare_dequeue_get() != NULL) {
+		tg_slot_stats[4]++;
+	} else {
+		tg_slot_stats[5]++;
+		s_gap_us = FLASH_US;
+	}
 	tg_radio_slot_stop();
 	s_aborting = true;
 	nrf_timer_task_trigger(TG_SLOT_TIMER, NRF_TIMER_TASK_CAPTURE3);
@@ -212,10 +261,12 @@ static void prepare(void *param)
 	/* A Bluetooth event running, or one waiting behind it: look again
 	 * later rather than preempt it. */
 	if (!lll_is_done(NULL, &is_resume) || ull_prepare_dequeue_get()) {
+		tg_slot_stats[2]++;
 		s_ull.ref--;
 		arm(TICKER_USER_ID_LLL, RETRY_US);
 		return;
 	}
+	tg_slot_stats[1]++;
 	err = lll_prepare(is_abort_cb, abort_cb, prepare_cb, 0, param);
 	LL_ASSERT(!err || err == -EINPROGRESS);
 }

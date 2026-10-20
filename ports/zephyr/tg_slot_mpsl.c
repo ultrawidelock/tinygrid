@@ -56,7 +56,7 @@ static mpsl_timeslot_signal_return_param_t *slot(mpsl_timeslot_session_id_t id, 
 		 * owner enables it, as Nordic's driver does. */
 		NVIC_ClearPendingIRQ(RADIO_IRQn);
 		irq_enable(RADIO_IRQn);
-		tg_radio_slot_start();
+		tg_radio_slot_start(TG_SLOT_US);
 		break;
 	case MPSL_TIMESLOT_SIGNAL_RADIO:
 		tg_radio_irq();

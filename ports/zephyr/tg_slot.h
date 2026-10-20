@@ -48,8 +48,9 @@ void tg_slot_end(void);
 /* ---- up: the provider to the radio --------------------------------------- */
 
 /** The RADIO and TG_SLOT_TIMER are the radio's until tg_slot_end() or
- * tg_radio_slot_stop(); the timer runs from zero. */
-void tg_radio_slot_start(void);
+ * tg_radio_slot_stop(); the timer runs from zero. @p us is this stretch;
+ * tg_slot_extend() asks for more. */
+void tg_radio_slot_start(uint32_t us);
 
 /** The extension asked for was granted. */
 void tg_radio_slot_extended(uint32_t us);

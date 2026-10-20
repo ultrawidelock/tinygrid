@@ -3,8 +3,8 @@
  * The Zephyr Bluetooth controller's vendor hooks, which it includes under
  * CONFIG_BT_CTLR_USER_EXT. tinygrid's radio turns that on for a ticker node of
  * its own (tg_slot_zll.c); it has no proprietary PDUs or events, so every hook
- * is a no-op. The operation counts are the slot's: one ticker start from the
- * thread, one from the radio context.
+ * is a no-op. The operation counts are the slot's: a ticker start from the
+ * thread, and one from the radio priority by way of ULL_HIGH.
  */
 #pragma once
 
@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 #define TICKER_USER_THREAD_VENDOR_OPS 1
-#define TICKER_USER_LLL_VENDOR_OPS 1
+#define TICKER_USER_ULL_HIGH_VENDOR_OPS 1
 
 struct node_rx_hdr;
 struct node_rx_event_done;
